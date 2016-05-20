@@ -1,0 +1,18 @@
+[package]
+name = "panini"
+version = "0.0.0"
+
+description = "A parser generator. This package is the runtime library."
+authors = [ "Piotr Czarnecki <pioczarn@gmail.com>" ]
+documentation = "http://pczarn.github.io/panini/"
+repository = "https://github.com/pczarn/panini/"
+license = "MIT/Apache-2.0"
+
+[lib]
+name = "panini"
+
+[dependencies]
+cfg = "0.3"
+gearley = "0.0"
+ref_slice = "1.0"
+typed-arena = "1.2"

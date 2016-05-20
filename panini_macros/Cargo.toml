@@ -1,0 +1,33 @@
+[package]
+name = "panini_macros"
+version = "0.0.0"
+
+description = """
+A parser generator. This package declares two syntax extensions:
+`grammar` and `enum_stream`.
+"""
+authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
+documentation = "http://pczarn.github.io/panini/"
+repository = "https://github.com/pczarn/panini/"
+license = "MIT/Apache-2.0"
+
+[lib]
+name = "panini_macros"
+plugin = true
+
+[dependencies]
+aster = "0.16"
+quasi = "0.10"
+quasi_macros = "0.10"
+
+bit-matrix = "0.2"
+cfg = "0.3"
+gearley = "0.0"
+
+panini = "0.0"
+panini_codegen = "0.0"
+panini_macros_snapshot = "0.0"
+enum_stream_codegen = "0.0"
+
+[dev-dependencies]
+compiletest_rs = "0"

@@ -1,0 +1,28 @@
+[package]
+name = "char_classifier"
+version = "0.0.0"
+
+description = """
+A parser generator. This package implements the `char_classifier` macro.
+"""
+authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
+documentation = "http://pczarn.github.io/panini/"
+repository = "https://github.com/pczarn/panini/"
+license = "MIT/Apache-2.0"
+
+[lib]
+name = "char_classifier"
+plugin = true
+
+[dependencies]
+log = "0.3"
+env_logger = "0.3"
+aster = "0.16"
+quasi = "0.10"
+quasi_macros = "0.10"
+panini = "0.0"
+panini_codegen = "0.0"
+panini_macros = "0.0"
+
+[dev-dependencies]
+compiletest_rs = "0"

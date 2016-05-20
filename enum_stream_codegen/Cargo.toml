@@ -1,0 +1,23 @@
+[package]
+name = "enum_stream_codegen"
+version = "0.0.0"
+
+description = """
+A parser generator. This package handles code generation
+for the `enum_stream` macro."
+"""
+authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
+documentation = "http://pczarn.github.io/panini/"
+repository = "https://github.com/pczarn/panini/"
+license = "MIT/Apache-2.0"
+
+[lib]
+name = "enum_stream_codegen"
+
+[dependencies]
+log = "0.3"
+env_logger = "0.3"
+aster = "0.16"
+quasi = "0.10"
+quasi_macros = "0.10"
+panini_codegen = "0.0"
