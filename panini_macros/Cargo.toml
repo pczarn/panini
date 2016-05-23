@@ -20,10 +20,6 @@ aster = "0.16"
 quasi = "0.10"
 quasi_macros = "0.10"
 
-bit-matrix = "0.2"
-cfg = "0.3"
-gearley = "0.0"
-
 panini = "0.0"
 panini_codegen = "0.0"
 panini_macros_snapshot = "0.0"
