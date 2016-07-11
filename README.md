@@ -45,7 +45,7 @@ These libraries were created for Panini.
   the best speed and small memory use. Written in C.
 * [Oak](https://github.com/ptal/oak/) — a PEG parser generator with typed expressions.
   Written in Rust.
-* [LALRPOP](https://github.com/ptal/oak/) — a LR(1) parser generator focused on ease of use.
+* [LALRPOP](https://github.com/nikomatsakis/lalrpop) — a LR(1) parser generator focused on ease of use.
   Written in Rust.
 * OMeta — a PEG parser with advanced features that go beyond parsing.
 
