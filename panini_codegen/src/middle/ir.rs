@@ -75,11 +75,11 @@ impl InternalExternalNameMap {
         }
     }
 
-    fn to_internal(&self, sym: Symbol) -> Option<Symbol> {
+    fn internalize(&self, sym: Symbol) -> Option<Symbol> {
         self.internal_external.to_internal[sym.usize()]
     }
 
-    fn to_external(&self, sym: Symbol) -> Symbol {
+    fn externalize(&self, sym: Symbol) -> Symbol {
         self.internal_external.to_external[sym.usize()]
     }
 
@@ -547,9 +547,9 @@ impl IrProperNonNullingBinarized {
                             if !usefulness.productivity(sym) {
                                 let dots = rule.history().dots();
                                 match (dots[pos].trace(), dots[pos + 1].trace()) {
-                                    (Some((origin1, pos1)), Some((origin2, pos2))) => {
-                                        if origin1 == origin2 && pos1 + 1 == pos2 {
-                                            unproductive_rules.push((origin1, pos1));
+                                    (Some(dot1), Some(dot2)) => {
+                                        if dot1.rule == dot2.rule && dot1.pos + 1 == dot2.pos {
+                                            unproductive_rules.push((dot1.rule, dot1.pos));
                                         }
                                     }
                                     _ => {}
@@ -599,15 +599,15 @@ impl IrMappedGrammar {
             remap.remove_unused_symbols();
             remap.get_mapping()
         };
-
-        if let Some(start) = maps.to_internal[bin_grammar.get_start().usize()] {
+        // Create a symbol mapping.
+        let maps = InternalExternalNameMap::new(maps, ir.common.name_map.clone());
+        // Internalize the start symbol.
+        if let Some(start) = maps.internalize(bin_grammar.get_start()) {
             bin_grammar.set_start(start);
         } else {
             // This is the second place where a grammar is checked for being empty.
             ir.common.errors.push(TransformationError::GrammarIsEmpty);
         };
-        let maps = InternalExternalNameMap::new(maps, ir.common.name_map.clone());
-
         Ok(IrMappedGrammar {
             bin_mapped_grammar: bin_grammar,
             nulling_grammar: ir.nulling_grammar,
@@ -682,12 +682,12 @@ impl Ir {
         IrMappedGrammar::transform_from_stmts(stmts).map(|ir| ir.into())
     }
 
-    pub fn to_internal(&self, symbol: Symbol) -> Option<Symbol> {
-        self.maps.to_internal(symbol)
+    pub fn internalize(&self, symbol: Symbol) -> Option<Symbol> {
+        self.maps.internalize(symbol)
     }
 
-    pub fn to_external(&self, symbol: Symbol) -> Symbol {
-        self.maps.to_external(symbol)
+    pub fn externalize(&self, symbol: Symbol) -> Symbol {
+        self.maps.externalize(symbol)
     }
 
     pub fn name_of_external(&self, symbol: Symbol) -> Option<rs::Name> {

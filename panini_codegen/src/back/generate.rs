@@ -263,7 +263,7 @@ impl<'a> GenParser<'a> {
             self.trans.ir.name_of_external(terminal).unwrap().to_ident()
         );
         let terminal_id = self.trans.terminals.iter().map(|&terminal|
-            self.trans.ir.to_internal(terminal).unwrap().usize()
+            self.trans.ir.internalize(terminal).unwrap().usize()
         );
 
         let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
@@ -328,7 +328,7 @@ impl<'a> GenParser<'a> {
 
         let sym_names = (0 .. num_syms).map(|sym_id| {
             let internal_sym = Symbol::from(sym_id);
-            let external_sym = self.trans.ir.to_external(internal_sym);
+            let external_sym = self.trans.ir.externalize(internal_sym);
             let sym_name = self.trans.ir.name_of_external(external_sym);
             if let Some(sym_name) = sym_name {
                 AstBuilder::new().expr().lit().str(&sym_name.as_str()[..])
@@ -718,7 +718,7 @@ impl<'a> GenParser<'a> {
     }
 
     pub fn translate_parse_def(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
-        let external_start = self.trans.ir.to_external(self.trans.ir.grammar.get_start());
+        let external_start = self.trans.ir.externalize(self.trans.ir.grammar.get_start());
         let start_type = &self.trans.type_map[&external_start]
                          .generate_qualified(self.trans.builder, self.unique_names.Infer);
         let start_variant = &self.trans.variant_names[&external_start];

@@ -195,7 +195,7 @@ impl IrTranslator {
     fn compute_terminals(&mut self) {
         for terminal in SymbolBitSet::terminal_set(&*self.ir.grammar).iter() {
             // Use external symbols, but translate later.
-            let terminal = self.ir.to_external(terminal);
+            let terminal = self.ir.externalize(terminal);
             self.terminals.push(terminal);
             let ty = self.builder.ty().path().id("I").id("T").build();
             self.ir.type_map.insert(terminal, Ty::RustTy(ty));
@@ -550,7 +550,7 @@ impl IrTranslator {
 
         for (rule, origin) in rules_with_external_origin {
             // Translate to external.
-            let rule_lhs = self.ir.to_external(rule.lhs());
+            let rule_lhs = self.ir.externalize(rule.lhs());
             let variant = self.variant_names[&rule_lhs];
 
             let (rust_expr, patterns) = self.get_action(origin as usize);
