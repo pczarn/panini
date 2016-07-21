@@ -15,7 +15,7 @@ impl Parser {
         Parser
     }
 
-    pub fn parse_grammar_from_tts(&mut self, cx: &mut rs::ExtCtxt, tts: &[rs::TokenTree]) -> Stmts {
+    pub fn parse_grammar_from_tts(&mut self, cx: &rs::ExtCtxt, tts: &[rs::TokenTree]) -> Stmts {
         let sess = cx.parse_sess();
         let mut trdr = rs::lexer::new_tt_reader(&sess.span_diagnostic, None, None, tts.to_vec());
 
@@ -32,7 +32,7 @@ impl Parser {
 
     pub fn parse_grammar(
         &mut self,
-        cx: &mut rs::ExtCtxt,
+        cx: &rs::ExtCtxt,
         tokens: &[rs::Token],
         spans: &[rs::Span])
         -> Stmts

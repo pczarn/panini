@@ -145,7 +145,7 @@ impl<'a> GenParser<'a> {
             ValueInfer, InferTreeVal,
             layer_macro, lower_layer_macro, ..
         } = self.unique_names;
-        let dol = rs::ast::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
 
         if self.trans.ir.lexer_for_upper.is_some() {
             let lexer_builder_def = self.translate_lexer_builder_def(cx);
@@ -266,7 +266,7 @@ impl<'a> GenParser<'a> {
             self.trans.ir.to_internal(terminal).unwrap().usize()
         );
 
-        let dol = rs::ast::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         let dol2 = dol.clone();
 
         let UniqueNames { Value, Infer, TerminalAccessor, .. } = self.unique_names;
@@ -1011,7 +1011,7 @@ impl<'a> GenParser<'a> {
 
     fn translate_identity(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
         let UniqueNames { layer_macro, .. } = self.unique_names;
-        let dol = rs::ast::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         // What to do with this?
         quote_tokens! {cx,
             // ########### QUOTED CODE #########################

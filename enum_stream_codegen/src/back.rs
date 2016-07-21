@@ -100,7 +100,7 @@ impl IrTranslator {
             rs::str_to_ident(&capitalized[..])
         }).collect::<Vec<_>>();
         let variant = variant.into_iter();
-        let dol = rs::ast::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
 
         let definition = quote_tokens! {cx,
             struct EnumStream<C> {

@@ -17,9 +17,9 @@ plugin = true
 [dependencies]
 log = "0.3"
 env_logger = "0.3"
-aster = "0.16"
-quasi = "0.10"
-quasi_macros = "0.10"
+aster = "0.21"
+quasi = "0.15"
+quasi_macros = "0.15"
 panini = "0.0"
 panini_codegen = "0.0"
 panini_macros = "0.0"

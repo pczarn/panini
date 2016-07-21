@@ -316,9 +316,9 @@ impl IrTranslator {
                     .trait_().id("Clone").build()
                     .with_generics(generics.clone())
                     .method("clone")
-                        .self_()
-                        .ref_()
-                        .fn_decl().build_return(ty.generate(self.builder))
+                        .fn_decl()
+                            .self_().ref_()
+                            .build_return(ty.generate(self.builder))
                     .block().expr().struct_id(capitalized_name).with_id_exprs(
                         members.iter().map(|(&name, _sym)| {
                             (name,
