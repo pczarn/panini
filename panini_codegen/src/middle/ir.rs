@@ -4,9 +4,10 @@ use std::mem;
 use std::iter;
 
 use bit_matrix::BitMatrix;
-use gearley::grammar::{Grammar, BinarizedGrammar};
+use gearley::grammar::{Grammar, BinarizedGrammar, History};
 use cfg::cycles::Cycles;
 use cfg::remap::{Remap, Mapping};
+use cfg::rule::RuleRef;
 use cfg::rule::container::RuleContainer;
 use cfg::usefulness::Usefulness;
 use cfg::*;
@@ -14,23 +15,24 @@ use cfg_regex::{RegexTranslation, ClassRange};
 
 use rs;
 use front::ast;
-use middle::{Action, ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy};
-use middle::hir::{self, SequenceRule};
-use middle::error::TransformationError;
+use middle::{Action, ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy, SymbolicName};
+use middle::hir;
+use middle::error::{TransformationError, CycleWithCauses};
 use middle::trace::{Trace, SourceOrigin};
 use middle::attr::{Attrs, LexerForUpper};
-use middle::warn::WarningCauses;
+use middle::warn::{WarningCauses, WarningsWithContext};
+use middle::rule::{Rule, BasicRule};
 
 pub struct Ir {
     pub grammar: BinarizedGrammar,
     pub nulling_grammar: BinarizedGrammar,
-    pub external_grammar: Vec<(Symbol, Vec<Symbol>)>,
-    pub sequences: Vec<SequenceRule<Symbol>>,
     pub trivial_derivation: bool,
-    pub actions: Vec<Action>,
-    pub type_map: HashMap<Symbol, Ty<Symbol>>,
+    // for actions, accessed by action ID.
+    pub basic_rules: Vec<BasicRule>,
+    pub type_map: HashMap<Symbol, Ty>,
     pub maps: InternalExternalNameMap,
-    pub assert_type_equality: Vec<(Symbol, Ty<Symbol>)>,
+    pub assert_type_equality: Vec<(Symbol, Ty)>,
+    // what the heck is LexerForUpper?
     pub lexer_for_upper: Option<LexerForUpper<Symbol>>,
     pub lower_level: LowerLevel,
     pub trace_tokens: Vec<Vec<String>>,
@@ -39,8 +41,8 @@ pub struct Ir {
 
 #[derive(Clone)]
 pub struct NameMap {
-    pub sym_map: HashMap<rs::Name, Symbol>,
-    pub sym_vec: Vec<Option<rs::Name>>,
+    pub sym_map: HashMap<SymbolicName, Symbol>,
+    pub sym_vec: Vec<Option<SymbolicName>>,
 }
 
 pub struct InternalExternalNameMap {
@@ -49,7 +51,7 @@ pub struct InternalExternalNameMap {
 }
 
 impl NameMap {
-    fn insert_padded(&mut self, sym: Symbol, name: rs::Name) {
+    fn insert_padded(&mut self, sym: Symbol, name: SymbolicName) {
         if self.sym_vec.len() <= sym.usize() {
             let pad_len = sym.usize() - self.sym_vec.len() + 1;
             self.sym_vec.extend(iter::repeat(None).take(pad_len));
@@ -58,11 +60,11 @@ impl NameMap {
         self.sym_map.insert(name, sym);
     }
 
-    fn to_name(&self, sym: Symbol) -> Option<rs::Name> {
+    fn to_name(&self, sym: Symbol) -> Option<SymbolicName> {
         self.sym_vec.get(sym.usize()).and_then(|opt| *opt)
     }
 
-    pub fn names(&self) -> &[Option<rs::Name>] {
+    pub fn names(&self) -> &[Option<SymbolicName>] {
         &self.sym_vec[..]
     }
 }
@@ -75,15 +77,15 @@ impl InternalExternalNameMap {
         }
     }
 
-    fn internalize(&self, sym: Symbol) -> Option<Symbol> {
+    pub fn internalize(&self, sym: Symbol) -> Option<Symbol> {
         self.internal_external.to_internal[sym.usize()]
     }
 
-    fn externalize(&self, sym: Symbol) -> Symbol {
+    pub fn externalize(&self, sym: Symbol) -> Symbol {
         self.internal_external.to_external[sym.usize()]
     }
 
-    fn name_of_external(&self, sym: Symbol) -> Option<rs::Name> {
+    pub fn name_of_external(&self, sym: Symbol) -> Option<SymbolicName> {
         self.name_map.to_name(sym)
     }
 
@@ -92,11 +94,11 @@ impl InternalExternalNameMap {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum LowerLevel {
     Invoke {
         lexer: Lexer,
-        embedded_strings: Vec<(rs::Spanned<Symbol>, rs::Spanned<rs::Name>, SourceOrigin)>,
+        embedded_strings: Vec<(rs::Spanned<Symbol>, rs::Spanned<SymbolicName>, SourceOrigin)>,
     },
     CharClassifier(Vec<(ClassRange, Symbol)>),
     None
@@ -104,15 +106,15 @@ pub enum LowerLevel {
 
 struct IrStmtsAndAttrs {
     stmts: ast::Stmts,
-    start: rs::Name,
-    attrs: Attrs<rs::Name>,
+    start: SymbolicName,
+    attrs: Attrs<SymbolicName>,
     errors: Vec<TransformationError>,
 }
 
 struct IrInitialHir {
-    hir_with_names: Hir<rs::Name>,
-    start: rs::Name,
-    attrs: Attrs<rs::Name>,
+    hir_with_names: Hir<SymbolicName>,
+    start: SymbolicName,
+    attrs: Attrs<SymbolicName>,
     errors: Vec<TransformationError>,
     // Final
     lower_level: LowerLevel,
@@ -120,7 +122,7 @@ struct IrInitialHir {
 }
 
 struct IrFinalHir {
-    hir: Hir<Symbol>,
+    hir: Hir,
     grammar: Grammar,
     name_map: NameMap,
     attrs: Attrs<Symbol>,
@@ -128,79 +130,69 @@ struct IrFinalHir {
     // Final
     lower_level: LowerLevel,
     trace_tokens: Vec<Vec<String>>,
-    hir_rules_with_names: Vec<hir::Rule<rs::Name>>,
+    // what for? For getting lhs and rhs spans. Accessed by action ID.
+    hir_rules_with_names: Vec<Rule<SymbolicName>>,
 }
 
-struct IrPreparedGrammar {
+struct IrPrepared {
     grammar: Grammar,
-    ordering: HashMap<(Symbol, Symbol), Ordering>,
     // Final
-    common: IrCommonPrepared,
+    common: CommonPrepared,
 }
 
-struct IrBinarizedGrammar {
+struct IrBinarized {
     bin_grammar: BinarizedGrammar,
-    ordering: HashMap<(Symbol, Symbol), Ordering>,
     // Final
-    common: IrCommonPrepared,
+    common: CommonPrepared,
 }
 
-struct IrNonNullingBinarized {
+struct IrNormalized {
     bin_grammar: BinarizedGrammar,
     nulling_grammar: BinarizedGrammar,
-    ordering: HashMap<(Symbol, Symbol), Ordering>,
     // Warning causes
-    cycles_among_nullable: Vec<u32>,
+    warnings: WarningCauses,
     // Final
     trivial_derivation: bool,
-    common: IrCommonPrepared,
+    common: CommonPrepared,
 }
 
-struct IrProperNonNullingBinarized {
+struct IrProperNormalized {
     bin_grammar: BinarizedGrammar,
     nulling_grammar: BinarizedGrammar,
-    ordering: HashMap<(Symbol, Symbol), Ordering>,
     // Warning causes
-    cycles: Vec<u32>,
-    cycles_among_nullable: Vec<u32>,
-    unproductive_rules: Vec<(u32, u32)>,
-    unreachable_rules: Vec<u32>,
+    warnings: WarningCauses,
     // Final
     trivial_derivation: bool,
-    common: IrCommonPrepared,
+    common: CommonPrepared,
 }
 
-pub struct IrMappedGrammar {
+pub struct IrMapped {
     bin_mapped_grammar: BinarizedGrammar,
     nulling_grammar: BinarizedGrammar,
     maps: InternalExternalNameMap,
     // Warning causes
-    cycles: Vec<u32>,
-    cycles_among_nullable: Vec<u32>,
-    unproductive_rules: Vec<(u32, u32)>,
-    unreachable_rules: Vec<u32>,
+    warnings: WarningCauses,
     // Final
     trivial_derivation: bool,
-    common: IrCommonPrepared,
+    common: CommonPrepared,
 }
 
 // Common
 
-struct IrCommonPrepared {
-    external_grammar: Vec<(Symbol, Vec<Symbol>)>,
-    actions: Vec<Action>,
+struct CommonPrepared {
+    basic_rules: Vec<BasicRule>,
     attrs: Attrs<Symbol>,
     lower_level: LowerLevel,
     trace_tokens: Vec<Vec<String>>,
     trace_sources: Vec<SourceOrigin>,
     name_map: NameMap,
-    hir_rules_with_names: Vec<hir::Rule<rs::Name>>,
-    hir: Hir<Symbol>,
+    hir_rules_with_names: Vec<Rule<SymbolicName>>,
+    hir: Hir,
     errors: Vec<TransformationError>,
 }
 
 impl IrStmtsAndAttrs {
-    fn compute(mut stmts: ast::Stmts, attrs: Attrs<rs::Name>) -> Result<Self, TransformationError> {
+    fn compute(mut stmts: ast::Stmts, attrs: Attrs<SymbolicName>) -> Result<Self, TransformationError> {
         // Obtain the explicit start.
         let start = if let Some(first_stmt) = stmts.stmts.get(0) {
             first_stmt.lhs.node
@@ -304,7 +296,7 @@ impl IrFinalHir {
     }
 }
 
-impl IrPreparedGrammar {
+impl IrPrepared {
     fn compute(mut ir: IrFinalHir) -> Self {
         let IrFinalHir { mut hir, mut grammar, .. } = ir;
         let embedded_strings = hir.embedded_strings.clone();
@@ -328,7 +320,7 @@ impl IrPreparedGrammar {
                                 &mut grammar,
                                 &*string.node.as_str()
                             );
-                            hir.rules.push(hir::Rule {
+                            hir.rules.push(Rule::BnfRule {
                                 lhs: symbol,
                                 rhs: vec![rs::dummy_spanned(sym2)],
                                 tuple_binds: vec![],
@@ -364,55 +356,21 @@ impl IrPreparedGrammar {
         };
 
         let mut trace_sources = vec![];
-        let mut external_grammar = vec![];
-        let mut actions = vec![];
-        let mut ordering = HashMap::new();
+        let mut basic_rules = vec![];
+        // Code common to all rules.
         for rule in &hir.rules {
-            let lhs = rule.lhs.node;
-            let rhs: Vec<_> = rule.rhs.iter().map(|s| s.node).collect();
-            if rhs.len() == 1 {
-                let mut left = lhs;
-                let mut ord = Ordering::Greater;
-                let mut right = rhs[0];
-                if left.usize() > right.usize() {
-                    mem::swap(&mut left, &mut right);
-                    ord = Ordering::Less;
-                }
-                ordering.insert((left, right), ord);
-            }
-            grammar.rule(lhs).rhs(&rhs);
-            external_grammar.push((lhs, rhs));
-            trace_sources.push(rule.source_origin.clone());
-            let action = if rule.action.is_inline() ||
-                    !rule.deep_binds.is_empty() ||
-                    !rule.shallow_binds.is_empty() {
-                Action::Struct {
-                    deep_binds: rule.deep_binds.clone(),
-                    shallow_binds: rule.shallow_binds.clone(),
-                    expr: rule.action.clone(),
-                }
-            } else {
-                Action::Tuple {
-                    tuple_binds: rule.tuple_binds.clone(),
-                }
-            };
-            actions.push(action);
+            rule.add_to(&mut grammar);
+            basic_rules.extend(rule.basic_rules().into_iter());
+            trace_sources.push(rule.source_origin().clone());
         }
-        //
-        for seq in &hir.sequence_rules {
-            grammar.sequence(seq.lhs.node).inclusive(seq.min, seq.max).rhs(seq.rhs.node);
-            trace_sources.push(seq.source_origin.clone());
-        }
-        //
+        // Must rewrite sequence rules. They need to be analyzed later.
         grammar.rewrite_sequences();
 
-        IrPreparedGrammar {
+        IrPrepared {
             grammar: grammar,
-            ordering: ordering,
             // Final
-            common: IrCommonPrepared {
-                external_grammar: external_grammar,
-                actions: actions,
+            common: CommonPrepared {
+                basic_rules: basic_rules,
                 attrs: ir.attrs,
                 errors: ir.errors,
                 trace_tokens: ir.trace_tokens,
@@ -426,70 +384,54 @@ impl IrPreparedGrammar {
     }
 }
 
-impl IrBinarizedGrammar {
-    fn compute(mut ir: IrPreparedGrammar) -> Result<Self, TransformationError> {
-        let mut cycle_auto_type = vec![];
+impl IrBinarized {
+    fn compute(mut ir: IrPrepared) -> Result<Self, TransformationError> {
         let mut cycle_matrix = BitMatrix::new(ir.grammar.num_syms(), ir.grammar.num_syms());
         for (&lhs_sym, ty) in &ir.common.hir.type_map {
-            match ty {
-                &Ty::Auto(AutoTy::Tuple { ref fields }) => {
-                    for &field_sym in fields {
-                        cycle_matrix.set(lhs_sym.usize(), field_sym.usize(), true);
-                    }
-                }
-                &Ty::Auto(AutoTy::Struct { ref members }) => {
-                    for &member_sym in members.values() {
-                        cycle_matrix.set(lhs_sym.usize(), member_sym.usize(), true);
-                    }
-                }
-                _ => {}
+            for ty_sym in ty.symbols() {
+                cycle_matrix.set(lhs_sym.usize(), ty_sym.usize(), true);
             }
         }
+        let mut cycles_among_auto_types = vec![];
         cycle_matrix.transitive_closure();
-        for ((hir_rule, rule), action) in ir.common.hir_rules_with_names.iter()
-                                          .zip(ir.grammar.rules())
-                                          .zip(ir.common.actions.iter()) {
-            if cycle_matrix[(rule.lhs().usize(), rule.lhs().usize())] {
-                let mut causes = vec![];
-                match action {
-                    &Action::Tuple { ref tuple_binds } => {
-                        for &bind_pos in tuple_binds {
-                            let sym = rule.rhs()[bind_pos];
-                            if cycle_matrix[(sym.usize(), sym.usize())] {
-                                causes.push(hir_rule.rhs[bind_pos]);
-                            }
-                        }
-                    }
-                    &Action::Struct { ref deep_binds, ref shallow_binds, .. } => {
-                        let shallow_bind_pos_iter = shallow_binds.iter().map(|t| t.0);
-                        for bind_pos in deep_binds.iter().cloned().chain(shallow_bind_pos_iter) {
-                            let sym = rule.rhs()[bind_pos];
-                            if cycle_matrix[(sym.usize(), sym.usize())] {
-                                causes.push(hir_rule.rhs[bind_pos]);
-                            }
-                        }
-                    }
-                }
-                cycle_auto_type.push((hir_rule.lhs, causes));
+        // make sure the actions still correspond to grammar rules.
+        // do not need hir_rules_with_names?
+        for rule in &ir.common.basic_rules {
+            // Declare lambdas
+            let to_rhs_symbol = |pos: usize| rule.rhs[pos];
+            let is_in_cycle = |sym: &rs::Spanned<Symbol>| cycle_matrix[(sym.node.usize(), sym.node.usize())];
+            // 
+            if is_in_cycle(&rule.lhs) {
+                // why does this only run for bound symbols, not all symbols? optimization??
+                // add regression test for recursive type among sequences?
+                let bound_symbols = rule.action.directly_bound_positions().map(to_rhs_symbol);
+                let causes = bound_symbols.filter(is_in_cycle).collect();
+                // can we access the symbolic name through the maps instead?
+                // do we access the symbolic name correctly? equivalently to through hir_map? - No, because we need spans from the hir_map.
+                // rule.history().origin()
+                cycles_among_auto_types.push(CycleWithCauses {
+                    lhs: rule.lhs,
+                    causes: causes,
+                });
             }
         }
-        if !cycle_auto_type.is_empty() {
-            ir.common.errors.push(TransformationError::RecursiveType(cycle_auto_type));
+        if cycles_among_auto_types.len() > 0 {
+            // We have cycles among types. Report them.
+            ir.common.errors.push(TransformationError::RecursiveType(cycles_among_auto_types));
         }
 
         let bin_grammar = ir.grammar.binarize();
 
-        Ok(IrBinarizedGrammar {
+        Ok(IrBinarized {
             bin_grammar: bin_grammar,
-            ordering: ir.ordering,
             // Final
             common: ir.common,
         })
     }
 }
 
-impl IrNonNullingBinarized {
-    fn compute(ir: IrBinarizedGrammar) -> Self {
+impl IrNormalized {
+    fn compute(ir: IrBinarized) -> Self {
         // eliminate
         let (bin_grammar, mut nulling_grammar) = ir.bin_grammar.eliminate_nulling();
         let start = bin_grammar.get_start();
@@ -501,24 +443,23 @@ impl IrNonNullingBinarized {
             }
         }
         null_cycle_matrix.transitive_closure();
-        let mut cycles_among_nullable = vec![];
+        let mut warnings = WarningCauses::new();
         nulling_grammar.retain(|lhs, rhs, history| {
-            let any_sym_on_diagonal = rhs.iter().chain(iter::once(&lhs)).any(|sym| {
-                null_cycle_matrix[(sym.usize(), sym.usize())]
-            });
-            if any_sym_on_diagonal {
-                cycles_among_nullable.push(history.origin().expect("internal rule with a cycle"));
+            let is_in_cycle = |sym: &Symbol| null_cycle_matrix[(sym.usize(), sym.usize())];
+            let lhs_once = [lhs];
+            let mut syms = lhs_once.iter().chain(rhs.iter());
+            if syms.any(is_in_cycle) {
+                warnings.cycles_among_nullable.push(history.origin().expect("internal rule with a cycle"));
                 false
             } else {
                 true
             }
         });
 
-        IrNonNullingBinarized {
+        IrNormalized {
             bin_grammar: bin_grammar,
             nulling_grammar: nulling_grammar,
-            ordering: ir.ordering,
-            cycles_among_nullable: cycles_among_nullable,
+            warnings: warnings,
             // Final
             trivial_derivation: trivial_derivation,
             common: ir.common,
@@ -526,59 +467,52 @@ impl IrNonNullingBinarized {
     }
 }
 
-impl IrProperNonNullingBinarized {
-    fn compute(mut ir: IrNonNullingBinarized) -> Self {
-        let mut unreachable_rules = vec![];
-        let mut unproductive_rules = vec![];
+impl IrProperNormalized {
+    fn compute(mut ir: IrNormalized) -> Self {
         // analyze reachability and productiveness
         {
             let start = ir.bin_grammar.get_start();
             let mut usefulness = Usefulness::new(&mut *ir.bin_grammar).reachable([start]);
-            if !usefulness.all_useful() {
-                for rule_uselessness in usefulness.useless_rules() {
-                    if rule_uselessness.unreachable {
-                        if let Some(origin) = rule_uselessness.rule.history().origin() {
-                            unreachable_rules.push(origin);
-                        }
-                    } else {
-                        // unproductive
-                        let rule = rule_uselessness.rule;
-                        for (pos, &sym) in rule.rhs().iter().enumerate() {
-                            if !usefulness.productivity(sym) {
-                                let dots = rule.history().dots();
-                                match (dots[pos].trace(), dots[pos + 1].trace()) {
-                                    (Some(dot1), Some(dot2)) => {
-                                        if dot1.rule == dot2.rule && dot1.pos + 1 == dot2.pos {
-                                            unproductive_rules.push((dot1.rule, dot1.pos));
-                                        }
+            for rule_uselessness in usefulness.useless_rules() {
+                if rule_uselessness.unreachable {
+                    if let Some(origin) = rule_uselessness.rule.history().origin() {
+                        ir.warnings.unreachable_rules.push(origin);
+                    }
+                } else {
+                    // unproductive
+                    let rule = rule_uselessness.rule;
+                    for (pos, &sym) in rule.rhs().iter().enumerate() {
+                        if !usefulness.productivity(sym) {
+                            let dots = rule.history().dots();
+                            match (dots[pos].trace(), dots[pos + 1].trace()) {
+                                (Some(dot1), Some(dot2)) => {
+                                    if dot1.rule == dot2.rule && dot1.pos + 1 == dot2.pos {
+                                        ir.warnings.unproductive_rules.push((dot1.rule, dot1.pos));
                                     }
-                                    _ => {}
                                 }
+                                _ => {}
                             }
                         }
                     }
                 }
-                usefulness.remove_useless_rules();
             }
+            // does it do anything when all rules are useful?
+            usefulness.remove_useless_rules();
         };
-        let cycles: Vec<_>;
+        let to_rule_origin = |rule: RuleRef<History>| {
+            rule.history().origin().expect("internal rule in a cycle")
+        };
         {
             let mut cycle_analysis = Cycles::new(&mut *ir.bin_grammar);
-            cycles = cycle_analysis.cycle_participants().map(|rule| {
-                rule.history().origin().expect("internal rule participates in a cycle")
-            }).collect();
+            ir.warnings.cycles = cycle_analysis.cycle_participants().map(to_rule_origin).collect();
             cycle_analysis.remove_cycles();
         };
 
-        IrProperNonNullingBinarized {
+        IrProperNormalized {
             bin_grammar: ir.bin_grammar,
             nulling_grammar: ir.nulling_grammar,
-            ordering: ir.ordering,
             // Warning causes
-            cycles: cycles,
-            cycles_among_nullable: ir.cycles_among_nullable,
-            unreachable_rules: unreachable_rules,
-            unproductive_rules: unproductive_rules,
+            warnings: ir.warnings,
             // Final
             trivial_derivation: ir.trivial_derivation,
             common: ir.common,
@@ -586,15 +520,39 @@ impl IrProperNonNullingBinarized {
     }
 }
 
-impl IrMappedGrammar {
-    fn compute(mut ir: IrProperNonNullingBinarized) -> Result<Self, TransformationError> {
+impl IrMapped {
+    fn compute(mut ir: IrProperNormalized) -> Result<Self, TransformationError> {
         // remap symbols
-        let IrProperNonNullingBinarized { mut bin_grammar, ordering, .. } = ir;
+        let IrProperNormalized { mut bin_grammar, .. } = ir;
+        // Order rules 
+        let mut ordering = HashMap::new();
+        for rule in bin_grammar.rules() {
+            if rule.rhs().len() == 1 {
+                let mut left = rule.lhs();
+                let mut right = rule.rhs()[0];
+                let ord;
+                if left.usize() > right.usize() {
+                    mem::swap(&mut left, &mut right);
+                    ord = Ordering::Less;
+                } else {
+                    ord = Ordering::Greater;
+                }
+                ordering.insert((left, right), ord);
+            }
+        }
         let maps = {
             // which one first?
+            // any way of not introducting a new scope, perhaps with an extension trait, a builder?
             let mut remap = Remap::new(&mut *bin_grammar);
             remap.reorder_symbols(|left, right| {
-                ordering.get(&(left, right)).cloned().unwrap_or(Ordering::Equal)
+                // - what if left > right? does it break?
+                let should_swap = left.usize() > right.usize();
+                let ord = if should_swap {
+                    ordering.get(&(right, left)).cloned().map(|ord| ord.reverse())
+                } else {
+                    ordering.get(&(left, right)).cloned()
+                };
+                ord.unwrap_or(Ordering::Equal)
             });
             remap.remove_unused_symbols();
             remap.get_mapping()
@@ -608,15 +566,38 @@ impl IrMappedGrammar {
             // This is the second place where a grammar is checked for being empty.
             ir.common.errors.push(TransformationError::GrammarIsEmpty);
         };
-        Ok(IrMappedGrammar {
-            bin_mapped_grammar: bin_grammar,
-            nulling_grammar: ir.nulling_grammar,
+        let mut bin = BinarizedGrammar::new();
+        for _ in 0 .. bin_grammar.num_syms() {
+            let _: Symbol = bin.sym();
+        }
+        for rule in bin_grammar.rules() {
+            // rhs = rule.rhs().to_owned();
+            let mut history = rule.history().clone();
+            history.nullable = history.nullable.map(|(sym, pos)| (maps.internalize(sym).unwrap(), pos));
+            bin.rule(rule.lhs()).rhs_with_history(rule.rhs(), history);
+        }
+        let mut remapped_nulling_grammar = BinarizedGrammar::new();
+        if let Some(start) = maps.internalize(ir.nulling_grammar.get_start()) {
+            remapped_nulling_grammar.set_start(start);
+        }
+        for _ in 0 .. bin_grammar.num_syms() {
+            let _: Symbol = remapped_nulling_grammar.sym();
+        }
+        bin.set_start(bin_grammar.get_start());
+        for rule in ir.nulling_grammar.rules() {
+            let lhs = maps.internalize(rule.lhs()).unwrap();
+            let rhs: Vec<_>;
+            rhs = rule.rhs().iter().map(|sym| maps.internalize(*sym).unwrap()).collect();
+            let mut history = rule.history().clone();
+            // history.nullable = history.nullable.map(|(sym, pos)| (maps.internalize(sym).unwrap(), pos));
+            remapped_nulling_grammar.rule(lhs).rhs_with_history(&rhs, history);
+        }
+        Ok(IrMapped {
+            bin_mapped_grammar: bin,
+            nulling_grammar: remapped_nulling_grammar,
             maps: maps,
             // Warning causes
-            cycles: ir.cycles,
-            cycles_among_nullable: ir.cycles_among_nullable,
-            unproductive_rules: ir.unproductive_rules,
-            unreachable_rules: ir.unreachable_rules,
+            warnings: ir.warnings,
             // Final
             trivial_derivation: ir.trivial_derivation,
             common: ir.common,
@@ -628,22 +609,18 @@ impl IrMappedGrammar {
         let ir = try!(IrStmtsAndAttrs::compute(stmts, attrs));
         let ir = try!(IrInitialHir::compute(ir));
         let ir = IrFinalHir::compute(ir);
-        let ir = IrPreparedGrammar::compute(ir);
-        let ir = try!(IrBinarizedGrammar::compute(ir));
-        let ir = IrNonNullingBinarized::compute(ir);
-        let ir = IrProperNonNullingBinarized::compute(ir);
-        IrMappedGrammar::compute(ir)
+        let ir = IrPrepared::compute(ir);
+        let ir = try!(IrBinarized::compute(ir));
+        let ir = IrNormalized::compute(ir);
+        let ir = IrProperNormalized::compute(ir);
+        IrMapped::compute(ir)
     }
 
     pub fn report_warnings(&self, cx: &mut rs::ExtCtxt) {
-        let warn = WarningCauses {
+        let warn = WarningsWithContext {
             attrs: &self.common.attrs,
-            external_grammar: &self.common.external_grammar[..],
-            hir_rules_with_names: &self.common.hir_rules_with_names[..],
-            cycles: &self.cycles[..],
-            cycles_among_nullable: &self.cycles_among_nullable[..],
-            unproductive_rules: &self.unproductive_rules[..],
-            unreachable_rules: &self.unreachable_rules[..],
+            basic_rules: &self.common.basic_rules[..],
+            causes: &self.warnings,
         };
         warn.report_warnings(cx);
     }
@@ -657,15 +634,13 @@ impl IrMappedGrammar {
     }
 }
 
-impl From<IrMappedGrammar> for Ir {
-    fn from(ir: IrMappedGrammar) -> Self {
+impl From<IrMapped> for Ir {
+    fn from(ir: IrMapped) -> Self {
         Ir {
             grammar: ir.bin_mapped_grammar,
             nulling_grammar: ir.nulling_grammar,
-            external_grammar: ir.common.external_grammar,
-            sequences: ir.common.hir.sequence_rules,
             trivial_derivation: ir.trivial_derivation,
-            actions: ir.common.actions,
+            basic_rules: ir.common.basic_rules,
             type_map: ir.common.hir.type_map,
             maps: ir.maps,
             assert_type_equality: ir.common.hir.assert_type_equality.into_inner(),
@@ -679,7 +654,7 @@ impl From<IrMappedGrammar> for Ir {
 
 impl Ir {
     pub fn transform(stmts: ast::Stmts) -> Result<Self, TransformationError> {
-        IrMappedGrammar::transform_from_stmts(stmts).map(|ir| ir.into())
+        IrMapped::transform_from_stmts(stmts).map(|ir| ir.into())
     }
 
     pub fn internalize(&self, symbol: Symbol) -> Option<Symbol> {
@@ -690,7 +665,7 @@ impl Ir {
         self.maps.externalize(symbol)
     }
 
-    pub fn name_of_external(&self, symbol: Symbol) -> Option<rs::Name> {
+    pub fn name_of_external(&self, symbol: Symbol) -> Option<SymbolicName> {
         self.maps.name_of_external(symbol)
     }
 

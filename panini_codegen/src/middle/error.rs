@@ -1,16 +1,19 @@
 use std::error::Error;
 use std::fmt;
 
+use cfg::Symbol;
+
 use rs;
+// use middle::{SpannedSymbolicName};
 
 pub use self::TransformationError::*;
 
-pub type Name = rs::Spanned<rs::Name>;
+// pub type Name = rs::Spanned<rs::Name>;
 
 #[derive(Debug)]
 pub enum TransformationError {
     GrammarIsEmpty,
-    RecursiveType(Vec<(Name, Vec<Name>)>),
+    RecursiveType(Vec<CycleWithCauses>),
     TypeMismatch,
     InvalidAttr(rs::Span),
 }
@@ -30,4 +33,10 @@ impl Error for TransformationError {
             InvalidAttr(_) => "invalid attribute.",
         }
     }
+}
+
+#[derive(Debug)]
+pub struct CycleWithCauses {
+    pub lhs: rs::Spanned<Symbol>,
+    pub causes: Vec<rs::Spanned<Symbol>>
 }

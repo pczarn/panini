@@ -4,18 +4,23 @@ use cfg::Symbol;
 
 use rs;
 
+use middle::{Rule, SymbolicName};
 use middle::attr::Attrs;
 use middle::hir;
+use middle::rule::BasicRule;
 use middle::lint::*;
 
-pub struct WarningCauses<'a> {
+pub struct WarningsWithContext<'a> {
     pub attrs: &'a Attrs<Symbol>,
-    pub external_grammar: &'a [(Symbol, Vec<Symbol>)],
-    pub hir_rules_with_names: &'a [hir::Rule<rs::Name>],
-    pub cycles: &'a [u32],
-    pub cycles_among_nullable: &'a [u32],
-    pub unproductive_rules: &'a [(u32, u32)],
-    pub unreachable_rules: &'a [u32],
+    pub basic_rules: &'a [BasicRule],
+    pub causes: &'a WarningCauses,
+}
+
+pub struct WarningCauses {
+    pub cycles: Vec<u32>,
+    pub cycles_among_nullable: Vec<u32>,
+    pub unproductive_rules: Vec<(u32, u32)>,
+    pub unreachable_rules: Vec<u32>,
 }
 
 const UNPRODUCTIVE_RULE: &'static str = "unproductive rule.";
@@ -27,18 +32,18 @@ const OVERRULED_LINT:    &'static str = "conflicting lint levels.";
 // const UNUSED_ATTR:       &'static str = "unused attribute.";
 
 
-impl<'a> WarningCauses<'a> {
+impl<'a> WarningsWithContext<'a> {
     pub fn report_warnings(&self, cx: &mut rs::ExtCtxt) {
         let mut unproductive_rules = HashMap::new();
 
-        for &(origin, pos) in self.unproductive_rules {
+        for &(origin, pos) in &self.causes.unproductive_rules {
             unproductive_rules.entry(origin).or_insert(vec![]).push(pos);
         }
 
         for (&origin, positions) in unproductive_rules.iter() {
-            let rule = &self.hir_rules_with_names[origin as usize];
+            let rule = &self.basic_rules[origin as usize];
             let causes = positions.iter().map(|&pos| rule.rhs[pos as usize].span);
-            let span = self.hir_rules_with_names[origin as usize].lhs.span;
+            let span = rule.lhs.span;
             let diag_opt = match self.attrs.get_lint_level(Unproductive) {
                 Allow => None,
                 Warn => {
@@ -60,8 +65,10 @@ impl<'a> WarningCauses<'a> {
             }
         }
 
-        for &origin in self.unreachable_rules {
-            let span = self.hir_rules_with_names[origin as usize].lhs.span;
+        // do something with this duplication..
+        // does this even work with unreachable sequence rules??
+        for &origin in &self.causes.unreachable_rules {
+            let span = self.basic_rules[origin as usize].lhs.span;
             match self.attrs.get_lint_level(DeadCode) {
                 Allow => {}
                 Warn => {
@@ -73,8 +80,8 @@ impl<'a> WarningCauses<'a> {
             }
         }
 
-        for &origin in self.cycles {
-            let span = self.hir_rules_with_names[origin as usize].lhs.span;
+        for &origin in &self.causes.cycles {
+            let span = self.basic_rules[origin as usize].lhs.span;
             match self.attrs.get_lint_level(Cycles) {
                 Allow => {}
                 Warn => {
@@ -86,8 +93,8 @@ impl<'a> WarningCauses<'a> {
             }
         }
 
-        for &origin in self.cycles_among_nullable {
-            let span = self.hir_rules_with_names[origin as usize].lhs.span;
+        for &origin in &self.causes.cycles_among_nullable {
+            let span = self.basic_rules[origin as usize].lhs.span;
             match self.attrs.get_lint_level(Cycles) {
                 Allow => {}
                 Warn => {
@@ -112,5 +119,16 @@ impl<'a> WarningCauses<'a> {
         // for &span in &self.attrs.unused_attrs {
         //     cx.span_warn(span, UNUSED_ATTR);
         // }
+    }
+}
+
+impl WarningCauses {
+    pub fn new() -> Self {
+        WarningCauses {
+            cycles: vec![],
+            cycles_among_nullable: vec![],
+            unproductive_rules: vec![],
+            unreachable_rules: vec![],
+        }
     }
 }

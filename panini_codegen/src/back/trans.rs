@@ -1,3 +1,7 @@
+//! Translate from IR to the lowest structures.
+//! Should this module have another name? The parallel to rustc trans will be lost on some people,
+//! and is unclear even to me.
+
 #![allow(non_snake_case)]
 
 use std::iter;
@@ -81,77 +85,7 @@ pub enum GenType {
     Terminal,
 }
 
-impl GenType {
-    pub fn generate(&self, builder: AstBuilder) -> rs::P<rs::Ty> {
-        match self {
-            &GenType::RustTy(ref ty) => ty.clone(),
-            &GenType::Unit => builder.ty().unit(),
-            &GenType::Identifier(name) => builder.ty().id(name),
-            &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate(builder));
-                }
-                ty_build.build()
-            }
-            &GenType::Item(name) => {
-                builder.ty().path().segment(name).with_generics(
-                    builder.generics().ty_param("I").build().build()
-                ).build().build()
-            }
-            &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec").with_ty(elem_ty.generate(builder)).build()
-                    .build()
-            }
-            &GenType::Infer(name) => {
-                builder.ty().path().id("I").id(&name).build()
-            }
-            &GenType::Terminal => {
-                builder.ty().path().id("I").id("T").build()
-            }
-        }
-    }
-
-    pub fn generate_qualified(&self, builder: AstBuilder, infer_trait: rs::ast::Ident)
-        -> rs::P<rs::Ty>
-    {
-        match self {
-            &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate_qualified(builder, infer_trait));
-                }
-                ty_build.build()
-            }
-            &GenType::Item(name) => {
-                builder.ty().
-                    path().segment(name).ty().path().id("I").id("Infer").build().build()
-                .build()
-            }
-            &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec")
-                            .with_ty(elem_ty.generate_qualified(builder, infer_trait))
-                        .build()
-                    .build()
-            }
-            &GenType::Infer(name) => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id(name)
-            }
-            &GenType::Terminal => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id("T")
-            }
-            _ => self.generate(builder)
-        }
-    }
-}
+// Creation
 
 impl IrTranslator {
     pub fn new(ir: Ir) -> Self {
@@ -394,13 +328,6 @@ impl IrTranslator {
         }).collect();
     }
 
-    fn lowercase_name(&self, sym: Symbol) -> rs::ast::Ident {
-        let rs_name = self.ir.name_of_external(sym).unwrap();
-        let mut name = rs_name.as_str().to_string();
-        write!(name, "_{}", rs_name.0).unwrap();
-        rs::str_to_ident(&name[..])
-    }
-
     fn capitalized_name(&self, name: &str, opt_id: Option<u32>) -> String {
         let mut capitalized: String = name.split('_').flat_map(|word| {
             let mut chars = word.chars();
@@ -413,20 +340,160 @@ impl IrTranslator {
         }
         capitalized
     }
+}
+
+impl GenType {
+    pub fn generate(&self, builder: AstBuilder) -> rs::P<rs::Ty> {
+        match self {
+            &GenType::RustTy(ref ty) => ty.clone(),
+            &GenType::Unit => builder.ty().unit(),
+            &GenType::Identifier(name) => builder.ty().id(name),
+            &GenType::Tuple(ref fields) => {
+                let mut ty_build = builder.ty().tuple();
+                for field in fields {
+                    ty_build = ty_build.with_ty(field.generate(builder));
+                }
+                ty_build.build()
+            }
+            &GenType::Item(name) => {
+                builder.ty().path().segment(name).with_generics(
+                    builder.generics().ty_param("I").build().build()
+                ).build().build()
+            }
+            &GenType::Vec(ref elem_ty) => {
+                builder.ty()
+                    .path()
+                        .segment("Vec").with_ty(elem_ty.generate(builder)).build()
+                    .build()
+            }
+            &GenType::Infer(name) => {
+                builder.ty().path().id("I").id(&name).build()
+            }
+            &GenType::Terminal => {
+                builder.ty().path().id("I").id("T").build()
+            }
+        }
+    }
+
+    pub fn generate_qualified(&self, builder: AstBuilder, infer_trait: rs::ast::Ident)
+        -> rs::P<rs::Ty>
+    {
+        match self {
+            &GenType::Tuple(ref fields) => {
+                let mut ty_build = builder.ty().tuple();
+                for field in fields {
+                    ty_build = ty_build.with_ty(field.generate_qualified(builder, infer_trait));
+                }
+                ty_build.build()
+            }
+            &GenType::Item(name) => {
+                builder.ty().
+                    path().segment(name).ty().path().id("I").id("Infer").build().build()
+                .build()
+            }
+            &GenType::Vec(ref elem_ty) => {
+                builder.ty()
+                    .path()
+                        .segment("Vec")
+                            .with_ty(elem_ty.generate_qualified(builder, infer_trait))
+                        .build()
+                    .build()
+            }
+            &GenType::Infer(name) => {
+                builder.ty()
+                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
+                    .id(name)
+            }
+            &GenType::Terminal => {
+                builder.ty()
+                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
+                    .id("T")
+            }
+            _ => self.generate(builder)
+        }
+    }
+}
+
+// Generation, after the following things are computed:
+// * variant map, with variant names
+// * type equality assertions
+
+impl IrTranslator {
+    pub fn generate(&mut self) -> GenParser {
+        let null = self.generate_nulling();
+
+        let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
+            self.ir.grammar.clone(),
+            Mapping::new(0),
+            self.ir.nulling_grammar.clone(),
+        );
+
+        let mut processed_rule = vec![];
+        let mut processed_sequences = vec![];
+
+        let mut seen_origin = HashSet::new();
+        // For generating actions.
+        let rules_with_external_origin = self.ir.grammar.rules().filter_map(|rule| {
+            if let Some(origin) = rule.history().origin() {
+                if seen_origin.insert(origin) {
+                    Some((rule, origin as u32))
+                } else {
+                    None
+                }
+            } else {
+                // Skip this rule.
+                None
+            }
+        });
+
+        for (rule, origin) in rules_with_external_origin {
+            // Translate to external.
+            let rule_lhs = self.ir.externalize(rule.lhs());
+            let variant = self.variant_names[&rule_lhs];
+
+            // DETECT SEQUENCE RULES HERE!
+            if let Some((rust_expr, patterns)) = self.get_action(origin as usize) {
+                processed_rule.push(GenRule {
+                    id: origin,
+                    variant: variant,
+                    action: rust_expr,
+                    args: patterns
+                });
+            } else {
+                let basic_rule = &self.ir.basic_rules[origin as usize];
+                let variant2 = self.variant_names[&basic_rule.lhs.node];
+                assert_eq!(variant, variant2);
+                processed_sequences.push(GenSequence {
+                    id: origin,
+                    variant: variant,
+                    elem_variant: self.variant_names[&basic_rule.rhs[0].node],
+                });
+            }
+        }
+
+        GenParser {
+            trans: self,
+            grammar_parts: internal_grammar.to_parts(),
+            null: null,
+            rules: processed_rule,
+            sequences: processed_sequences,
+            unique_names: self.unique_names,
+        }
+    }
 
     fn get_action(
         &self,
         origin: usize)
-        -> (rs::P<rs::Expr>, Vec<GenArg>)
+        -> Option<(rs::P<rs::Expr>, Vec<GenArg>)>
     {
-        let (rule_lhs, ref rule_rhs) = self.ir.external_grammar[origin];
+        let basic_rule = &self.ir.basic_rules[origin];
         let mut patterns = vec![];
 
-        let rust_expr = match &self.ir.actions[origin] {
+        let rust_expr = match &basic_rule.action {
             &Action::Struct { ref deep_binds, ref shallow_binds, ref expr } => {
                 if !deep_binds.is_empty() {
                     for &rhs_pos in deep_binds {
-                        let rhs_sym = rule_rhs[rhs_pos];
+                        let rhs_sym = basic_rule.rhs[rhs_pos].node;
                         let variant = self.variant_names[&rhs_sym];
                         let pat = self.get_auto_pattern(rhs_sym).expect("auto pattern not found");
                         patterns.push(GenArg {
@@ -437,7 +504,7 @@ impl IrTranslator {
                     }
                 } else if !shallow_binds.is_empty() {
                     for &(rhs_pos, ident) in shallow_binds {
-                        let rhs_sym = rule_rhs[rhs_pos];
+                        let rhs_sym = basic_rule.rhs[rhs_pos].node;
                         let variant = self.variant_names[&rhs_sym];
                         let pat = self.builder.pat().id(ident);
                         patterns.push(GenArg {
@@ -450,7 +517,7 @@ impl IrTranslator {
 
                 match expr {
                     &ActionExpr::Auto => {
-                        self.get_auto_expr(rule_lhs)
+                        self.get_auto_expr(basic_rule.lhs.node)
                     }
                     &ActionExpr::Inline { ref expr } => {
                         expr.clone()
@@ -463,7 +530,7 @@ impl IrTranslator {
                     self.builder.id(format!("arg{}", pos))
                 }).collect();
                 patterns = tuple_binds.iter().zip(idents.iter()).map(|(&pos, &ident)| {
-                    let variant = self.variant_names[&rule_rhs[pos]];
+                    let variant = self.variant_names[&basic_rule.rhs[pos].node];
                     let pat = self.builder.pat().id(ident);
                     GenArg {
                         num: pos,
@@ -485,8 +552,11 @@ impl IrTranslator {
                     }
                 }
             }
+            &Action::Sequence => {
+                return None;
+            }
         };
-        (rust_expr, patterns)
+        Some((rust_expr, patterns))
     }
 
     fn get_auto_expr(&self, nonterminal: Symbol) -> rs::P<rs::Expr> {
@@ -523,67 +593,12 @@ impl IrTranslator {
         }
     }
 
-    pub fn generate(&mut self) -> GenParser {
-        let null = self.generate_nulling();
-
-        let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
-            self.ir.grammar.clone(),
-            Mapping::new(0),
-            self.ir.nulling_grammar.clone(),
-        );
-
-        let mut processed_rule = vec![];
-
-        let mut seen_origin = HashSet::new();
-        let rules_with_external_origin = self.ir.grammar.rules().filter_map(|rule| {
-            if let Some(origin) = rule.history().origin() {
-                if (origin as usize) < self.ir.actions.len() && seen_origin.insert(origin) {
-                    Some((rule, origin as u32))
-                } else {
-                    None
-                }
-            } else {
-                // Skip this rule.
-                None
-            }
-        });
-
-        for (rule, origin) in rules_with_external_origin {
-            // Translate to external.
-            let rule_lhs = self.ir.externalize(rule.lhs());
-            let variant = self.variant_names[&rule_lhs];
-
-            let (rust_expr, patterns) = self.get_action(origin as usize);
-            processed_rule.push(GenRule {
-                id: origin,
-                variant: variant,
-                action: rust_expr,
-                args: patterns
-            });
-        }
-
-        let mut processed_sequences = vec![];
-        for sequence in &self.ir.sequences {
-            processed_sequences.push(GenSequence {
-                elem_variant: self.variant_names[&sequence.rhs.node],
-                variant: self.variant_names[&sequence.lhs.node],
-            });
-        }
-
-        GenParser {
-            trans: self,
-            grammar_parts: internal_grammar.to_parts(),
-            null: null,
-            rules: processed_rule,
-            sequences: processed_sequences,
-            unique_names: self.unique_names,
-        }
-    }
-
     fn generate_nulling(&mut self) -> GenNulling {
         // Nulling rules
-        let num_nulling_syms = self.ir.name_map().names().len();
+        // are these equal?
+        let num_nulling_syms = self.ir.grammar.num_syms();
         let num_all_nulling_syms = self.ir.nulling_grammar.sym_source().num_syms();
+        // Declarations
         let mut null_rules = iter::repeat(vec![]).take(num_nulling_syms).collect::<Vec<_>>();
         let mut null_num = iter::repeat(0).take(num_nulling_syms).collect::<Vec<_>>();
         let mut null_order = iter::repeat(u32::MAX).take(num_nulling_syms).collect::<Vec<_>>();
@@ -603,7 +618,9 @@ impl IrTranslator {
             if rule.rhs().len() == 0 {
                 // Can `origin` be None? In sequences? No.
                 let origin = rule.history().origin().unwrap() as usize;
-                let action_expr = match self.ir.actions.get(origin) {
+                let basic_rule = self.ir.basic_rules.get(origin);
+                let action = basic_rule.map(|basic_rule| &basic_rule.action);
+                let action_expr = match action {
                     Some(&Action::Tuple { .. }) => {
                         unreachable!("found nulling rule that has a tuple type")
                     }
@@ -611,9 +628,10 @@ impl IrTranslator {
                         expr.clone()
                     }
                     // A sequence rule.
-                    _ => {
+                    Some(&Action::Sequence) => {
                         self.builder.expr().call().path().ids(&["Vec", "new"]).build().build()
                     }
+                    _ => unreachable!("found unknown action")
                 };
                 let inner = self.builder.block()
                         .stmt().expr().call().id(continuation_label).with_arg(action_expr)
@@ -630,7 +648,8 @@ impl IrTranslator {
                     null_intermediate[rule.lhs().usize()] = Some(rule.rhs().to_owned());
                 }
                 null_work.push((
-                    rule.lhs(), rule.rhs()[0],
+                    rule.lhs(),
+                    rule.rhs()[0],
                     rule.rhs().get(1).cloned(),
                     rule.history.origin()
                 ));
@@ -646,7 +665,8 @@ impl IrTranslator {
                     // Process this later.
                     true
                 } else if let Some(origin) = action {
-                    let (action_expr, patterns) = self.get_action(origin as usize);
+                    // There are no sequence rules among nulling rules, so unwrapping is ok.
+                    let (action_expr, patterns) = self.get_action(origin as usize).unwrap();
                     let mut pats = HashMap::new();
                     for arg in patterns.into_iter() {
                         pats.insert(arg.num, arg.pat);
@@ -667,7 +687,7 @@ impl IrTranslator {
                     let mut inner_layer = self.builder.block().stmt().expr()
                         .call().id(continuation_label).with_arg(action_expr).build().build();
                     for (i, &factor) in factors.iter().enumerate().rev() {
-                        let name = self.lowercase_name(factor);
+                        let name = self.lowercase_name(self.ir.externalize(factor));
                         let pat = pats.get(&i).cloned()
                                               .unwrap_or_else(|| self.builder.pat().wild());
                         let fn_decl = self.builder.fn_decl()
@@ -691,6 +711,7 @@ impl IrTranslator {
                     null_num[lhs.usize()] += factors.iter().fold(1, |acc, &factor| {
                         acc * null_num[factor.usize()]
                     });
+                    // what is this order for?
                     if null_order[lhs.usize()] > null_num_rules {
                         null_order[lhs.usize()] = null_num_rules;
                         null_num_rules += 1;
@@ -701,7 +722,8 @@ impl IrTranslator {
                     null_deps[lhs.usize()] -= 1;
                     false
                 }
-            })
+            });
+            // check if fixpoint is reached?
         }
 
         let mut null = null_rules.into_iter().zip(null_num).enumerate().collect::<Vec<_>>();
@@ -713,19 +735,23 @@ impl IrTranslator {
         let mut rules = vec![];
         let mut roots = vec![];
         for (i, (blocks, num)) in null {
-            let ident = self.lowercase_name(Symbol::from(i));
+            let lhs_sym = Symbol::from(i);
+            let external_lhs = self.ir.externalize(lhs_sym);
             if !blocks.is_empty() {
+                let ident = self.lowercase_name(external_lhs);
                 rules.push(GenNullingRule {
                     name: ident,
                     blocks: blocks
                 });
             }
             if num != 0 {
-                let lhs_sym = Symbol::from(i);
+                let ident = self.lowercase_name(external_lhs);
                 roots.push(GenNullingRoot {
+                    // This symbol must be internal
                     sym: lhs_sym,
                     num: num,
-                    name: ident
+                    name: ident,
+                    variant_name: self.variant_names[&external_lhs],
                 });
             }
         }
@@ -734,6 +760,13 @@ impl IrTranslator {
             roots: roots,
             continuation_label: continuation_label,
         }
+    }
+
+    fn lowercase_name(&self, sym: Symbol) -> rs::ast::Ident {
+        let rs_name = self.ir.name_of_external(sym).unwrap();
+        let mut name = rs_name.as_str().to_string();
+        write!(name, "_{}", rs_name.0).unwrap();
+        rs::str_to_ident(&name[..])
     }
 }
 

@@ -16,7 +16,7 @@ enum Word {
 }
 
 #[test]
-fn test_simple() {
+fn test_simple_english() {
     for &verb in &[Bites, Pets] {
         let input = [The, Dog, verb, A, Man];
         let mut parser = grammar! {

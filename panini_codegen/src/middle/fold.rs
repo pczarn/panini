@@ -6,15 +6,14 @@ use cfg::symbol::{Symbol, SymbolSource};
 
 use rs;
 
-use middle::{Ty, AutoTy, Hir};
-use middle::hir::{Rule, SequenceRule};
+use middle::{Ty, AutoTy, Hir, Rule, FoldRule, SymbolicName};
 
-pub trait FoldHir<S1> where S1: Eq + Hash {
-    type Symbol: Eq + Hash;
+pub trait FoldHir<S1>: FoldRule<S1>
+    where S1: Eq + Hash
+{
     fn fold_hir(&mut self, hir: Hir<S1>) -> Hir<Self::Symbol> {
         Hir {
             rules: self.fold_rules(hir.rules),
-            sequence_rules: self.fold_sequence_rules(hir.sequence_rules),
             type_map: self.fold_type_map(hir.type_map),
             type_equality: hir.type_equality.into_iter().map(|(sym, ty)| {
                 (self.fold_symbol(sym), self.fold_ty(ty))
@@ -32,38 +31,6 @@ pub trait FoldHir<S1> where S1: Eq + Hash {
 
     fn fold_rules(&mut self, rules: Vec<Rule<S1>>) -> Vec<Rule<Self::Symbol>> {
         rules.into_iter().map(|rule| self.fold_rule(rule)).collect()
-    }
-
-    fn fold_sequence_rules(&mut self, sequence_rules: Vec<SequenceRule<S1>>)
-        -> Vec<SequenceRule<Self::Symbol>>
-    {
-        sequence_rules.into_iter().map(|rule| self.fold_sequence_rule(rule)).collect()
-    }
-
-    fn fold_rule(&mut self, rule: Rule<S1>) -> Rule<Self::Symbol> {
-        Rule {
-            lhs: self.fold_spanned_symbol(rule.lhs),
-            rhs: rule.rhs.into_iter().map(|sym| self.fold_spanned_symbol(sym)).collect(),
-            tuple_binds: rule.tuple_binds,
-            deep_binds: rule.deep_binds,
-            shallow_binds: rule.shallow_binds,
-            source_origin: rule.source_origin,
-            action: rule.action,
-        }
-    }
-
-    fn fold_sequence_rule(&mut self, sequence_rule: SequenceRule<S1>)
-        -> SequenceRule<Self::Symbol>
-    {
-        SequenceRule {
-            lhs: self.fold_spanned_symbol(sequence_rule.lhs),
-            rhs: self.fold_spanned_symbol(sequence_rule.rhs),
-            // sep: Option<rs::Name>,
-            min: sequence_rule.min,
-            max: sequence_rule.max,
-            source_origin: sequence_rule.source_origin,
-            action: sequence_rule.action,
-        }
     }
 
     fn fold_type_map(&mut self, type_map: HashMap<S1, Ty<S1>>)
@@ -93,12 +60,6 @@ pub trait FoldHir<S1> where S1: Eq + Hash {
             Ty::Infer => Ty::Infer,
         }
     }
-
-    fn fold_spanned_symbol(&mut self, symbol: rs::Spanned<S1>) -> rs::Spanned<Self::Symbol> {
-        rs::respan(symbol.span, self.fold_symbol(symbol.node))
-    }
-
-    fn fold_symbol(&mut self, symbol: S1) -> Self::Symbol;
 }
 
 pub struct Folder<'a> {
@@ -117,9 +78,10 @@ impl<'a> Folder<'a> {
     }
 }
 
-impl<'a> FoldHir<rs::Name> for Folder<'a> {
+impl<'a> FoldRule<SymbolicName> for Folder<'a> {
     type Symbol = Symbol;
-    fn fold_symbol(&mut self, symbol: rs::Name) -> Symbol {
+
+    fn fold_symbol(&mut self, symbol: SymbolicName) -> Symbol {
         let sym_source = &mut self.sym_source;
         let sym_vec = &mut self.sym_vec;
         *self.sym_map.entry(symbol).or_insert_with(|| {
@@ -128,4 +90,7 @@ impl<'a> FoldHir<rs::Name> for Folder<'a> {
             sym
         })
     }
+}
+
+impl<'a> FoldHir<SymbolicName> for Folder<'a> {
 }

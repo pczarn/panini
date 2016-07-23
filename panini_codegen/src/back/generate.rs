@@ -12,6 +12,8 @@ use rs;
 use middle::LowerLevel;
 use back::IrTranslator;
 
+// Info for generation.
+
 pub struct GenParser<'a> {
     pub trans: &'a IrTranslator,
     pub grammar_parts: InternalGrammarParts,
@@ -29,15 +31,20 @@ pub struct GenNulling {
     pub continuation_label: rs::ast::Ident,
 }
 
+#[derive(Debug)]
 pub struct GenNullingRule {
     pub name: rs::ast::Ident,
     pub blocks: Vec<rs::P<rs::Block>>,
 }
 
+#[derive(Debug)]
 pub struct GenNullingRoot {
+    // This symbol must be internal
     pub sym: Symbol,
     pub num: usize,
     pub name: rs::ast::Ident,
+    // redundant?
+    pub variant_name: rs::ast::Ident,
 }
 
 // Rules
@@ -58,9 +65,13 @@ pub struct GenArg {
 // Sequcene rules
 
 pub struct GenSequence {
+    pub id: u32,
     pub elem_variant: rs::ast::Ident,
     pub variant: rs::ast::Ident,
 }
+
+//------------------------------
+// Names of generated items. The number unique to this layer is put on every name.
 
 #[derive(Copy, Clone)]
 pub struct UniqueNames {
@@ -842,9 +853,7 @@ impl<'a> GenParser<'a> {
         let arg_variant = self.rules.iter().map(|r| r.args.iter().map(|p| &p.variant));
         let arg_pat = self.rules.iter().map(|r| r.args.iter().map(|p| &p.pat));
 
-        let num_external_rules = self.trans.ir.external_grammar.len() as u32;
-        let num_external_sequences = self.sequences.len() as u32;
-        let seq_action_id = num_external_rules .. (num_external_rules + num_external_sequences);
+        let seq_action_id = self.sequences.iter().map(|s| &s.id);
         let seq_element_variant = self.sequences.iter().map(|s| &s.elem_variant);
         let seq_variant = self.sequences.iter().map(|s| &s.variant);
 
@@ -852,9 +861,7 @@ impl<'a> GenParser<'a> {
         // All lengths are non-zero
         let null_num_summands = self.null.roots.iter().map(|root| root.num);
         let null_sym_name = self.null.roots.iter().map(|root| root.name);
-        let null_variant = self.null.roots.iter().map(|root| {
-            self.trans.variant_names[&root.sym]
-        });
+        let null_variant = self.null.roots.iter().map(|root| root.variant_name);
 
         let UniqueNames { Value, lower_layer_macro, .. } = self.unique_names;
         let Value_ = Value;
@@ -892,7 +899,9 @@ impl<'a> GenParser<'a> {
                                     )*
                                     id => unreachable!("nulling id {}", id)
                                 }
-                                nulling.result(_builder.into_slice());
+                                let slice = _builder.into_slice();
+                                assert!(!slice.is_empty(), "built slice is empty");
+                                nulling.result(slice);
                             }
                         }
                     }

@@ -33,7 +33,7 @@ use back::GenResult;
 pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
                 sp: rs::Span,
                 stmts: Stmts) -> Box<rs::MacResult + 'cx> {
-    match middle::ir::IrMappedGrammar::transform_from_stmts(stmts) {
+    match middle::ir::IrMapped::transform_from_stmts(stmts) {
         Ok(ir) => {
             ir.report_warnings(ecx);
             if let Some(errors) = ir.get_errors() {
@@ -72,9 +72,10 @@ pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
 fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError) {
     match error {
         &TransformationError::RecursiveType(ref types) => {
-            for &(ref lhs, ref causes) in types {
-                let mut diag = ecx.struct_span_err(lhs.span, error.description());
-                let multispan = rs::MultiSpan::from_spans(causes.iter().map(|c| c.span).collect());
+            for rule in types {
+                let mut diag = ecx.struct_span_err(rule.lhs.span, error.description());
+                let cause_spans = rule.causes.iter().map(|c| c.span).collect();
+                let multispan = rs::MultiSpan::from_spans(cause_spans);
                 let msg = if multispan.primary_spans().len() == 1 {
                     "this symbol has a recursive type:"
                 } else {
@@ -86,6 +87,8 @@ fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError
         }
         _ => {
             ecx.span_err(sp, error.description());
+            ecx.parse_sess.span_diagnostic.abort_if_errors();
+            panic!();
         }
     }
 }

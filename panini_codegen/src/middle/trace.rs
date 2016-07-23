@@ -16,7 +16,7 @@ pub struct TraceStmt {
     pub rhs: Vec<TraceToken>,
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceOrigin {
     pub rule_id: u32,
     pub rule_pos: Vec<u32>,

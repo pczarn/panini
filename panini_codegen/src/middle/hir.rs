@@ -2,50 +2,34 @@ use std::collections::HashMap;
 use std::mem;
 use std::cell::RefCell;
 
+use cfg::*;
+
 use rs;
 use front::{ast, Name};
 use front::visit::RhsAstVisitor;
-use middle::{ActionExpr, Ty, AutoTy};
+use middle::{ActionExpr, Ty, AutoTy, Rule};
 use middle::trace::SourceOrigin;
 
-pub struct Hir<S> {
+// how else name this?
+pub type SymbolicName = rs::Name;
+pub type SpannedSymbolicName = rs::Spanned<rs::Name>;
+
+// some questions.
+// Why is Hir parameterized?
+// what are SymbolicName and Symbol? what are they for?
+
+pub struct Hir<S = Symbol> {
     pub rules: Vec<Rule<S>>,
-    pub sequence_rules: Vec<SequenceRule<S>>,
     pub type_map: HashMap<S, Ty<S>>,
     pub type_equality: Vec<(S, Ty<S>)>,
     pub assert_type_equality: RefCell<Vec<(S, Ty<S>)>>,
     pub embedded_strings: Vec<(rs::Spanned<S>, Name, SourceOrigin)>,
 }
 
-#[derive(Clone)]
-pub struct Rule<S> {
-    pub lhs: rs::Spanned<S>,
-    pub rhs: Vec<rs::Spanned<S>>,
-    pub tuple_binds: Vec<usize>,
-    pub deep_binds: Vec<usize>,
-    pub shallow_binds: Vec<(usize, rs::ast::Ident)>,
-    pub action: ActionExpr,
-    pub source_origin: SourceOrigin,
-}
-
-#[derive(Clone)]
-pub struct SequenceRule<S> {
-    pub lhs: rs::Spanned<S>,
-    pub rhs: rs::Spanned<S>,
-    // sep: Option<rs::Name>,
-    pub min: u32,
-    pub max: Option<u32>,
-    pub action: ActionExpr,
-    pub source_origin: SourceOrigin,
-}
-
-pub type Symbol = rs::Name;
-
-impl Hir<Symbol> {
+impl Hir<SymbolicName> {
     pub fn transform_stmts(stmts: &ast::Stmts) -> Self {
         let mut hir = Hir {
             rules: vec![],
-            sequence_rules: vec![],
             type_map: HashMap::new(),
             type_equality: vec![],
             assert_type_equality: RefCell::new(vec![]),
@@ -89,7 +73,7 @@ impl Hir<Symbol> {
                 self.type_map.insert(rule.lhs.node, ty);
             }
 
-            self.rules.push(Rule {
+            self.rules.push(Rule::BnfRule {
                 lhs: rule.lhs,
                 rhs: rule.rhs,
                 tuple_binds: rule.tuple_binds,
@@ -116,7 +100,7 @@ impl Hir<Symbol> {
             } else {
                 self.type_map.insert(new_rule.lhs.node, new_auto_ty);
             }
-            self.rules.push(Rule {
+            self.rules.push(Rule::BnfRule {
                 lhs: new_rule.lhs,
                 rhs: new_rule.rhs,
                 tuple_binds: new_rule.tuple_binds,
@@ -134,7 +118,7 @@ impl Hir<Symbol> {
             } else {
                 self.type_map.insert(new_sequence.lhs.node, new_auto_ty);
             }
-            self.sequence_rules.push(SequenceRule {
+            self.rules.push(Rule::SequenceRule {
                 lhs: new_sequence.lhs,
                 rhs: new_sequence.rhs,
                 min: new_sequence.min,
@@ -159,7 +143,7 @@ impl Hir<Symbol> {
         true
     }
 
-    fn sym_ty_equal(&self, left: Symbol, right: Symbol) -> bool {
+    fn sym_ty_equal(&self, left: SymbolicName, right: SymbolicName) -> bool {
         // Prevent deep comparison of same types.
         if left == right {
             return true;
@@ -178,7 +162,7 @@ impl Hir<Symbol> {
         }
     }
 
-    fn ty_equal(&self, left: Symbol, right: &Ty<Symbol>) -> bool {
+    fn ty_equal(&self, left: SymbolicName, right: &Ty<SymbolicName>) -> bool {
         let left_ty = &self.type_map[&left];
         match (left_ty, right) {
             (&Ty::Auto(ref l_auto), &Ty::Auto(ref r_auto)) => {
@@ -200,7 +184,7 @@ impl Hir<Symbol> {
         }
     }
 
-    fn auto_ty_equal(&self, left: &AutoTy<Symbol>, right: &AutoTy<Symbol>) -> bool {
+    fn auto_ty_equal(&self, left: &AutoTy<SymbolicName>, right: &AutoTy<SymbolicName>) -> bool {
         match (left, right) {
             (&AutoTy::Tuple { fields: ref left_syms },
              &AutoTy::Tuple { fields: ref right_syms }) => {
@@ -250,6 +234,7 @@ struct FlatRule {
 }
 
 // The AutoTy for a Sequence is a Vec<type of rhs>.
+// The action is not set here, it is later set to Auto.
 struct FlatSequence {
     lhs: Name,
     rhs: Name,
@@ -320,6 +305,7 @@ impl RhsAstVisitor for FlattenRhsAst {
         // Walk through `sequence.rhs`, collecting the contents to `rule_lhs ::= ...`.
         let older_rule_pos = self.cur_rule_pos;
         self.rule_stack.push(FlatRule::new(rule_lhs, self.rule_id, self.cur_rule_pos));
+        // Define the rule declared above.
         self.walk_sequence(sequence);
         self.new_sequences.push(FlatSequence {
             lhs: seq_lhs,

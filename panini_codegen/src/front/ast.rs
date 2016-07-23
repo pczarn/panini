@@ -42,6 +42,10 @@ pub struct Sequence {
     pub max: Option<u32>,
 }
 
+// pub struct Precedenced {
+    
+// }
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Action {
     pub expr: Option<rs::P<rs::Expr>>,
