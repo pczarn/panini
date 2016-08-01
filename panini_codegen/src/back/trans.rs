@@ -39,9 +39,10 @@ use back::generate::{
     GenType,
     GenArgumentsFromOuterLayer,
     GenInvocationOfInnerLayer,
-    GenInvoke,
     UniqueNames,
 };
+
+const CHAR_CLASSIFIER_MACRO_NAME: &'static str = "char_classifier";
 
 pub struct IrTranslator {
     // Intermediate representation (higher-level).
@@ -430,7 +431,7 @@ impl IrTranslator {
 
         let inner_layer = match &self.ir.invocation_of_inner_layer {
             &InvocationOfInnerLayer::Invoke { ref lexer_invocation, ref embedded_strings } => {
-                GenInvocationOfInnerLayer::Invoke(GenInvoke {
+                Some(GenInvocationOfInnerLayer {
                     lexer_name: lexer_invocation.name().to_ident(),
                     lexer_tts: lexer_invocation.tts(),
                     str_lhs: embedded_strings.iter().map(|embed| {
@@ -439,20 +440,26 @@ impl IrTranslator {
                     str_rhs: embedded_strings.iter().map(|embed| {
                         embed.string.node
                     }).collect(),
+                    char_range_lhs: vec![],
+                    char_ranges: vec![],
                 })
             }
             &InvocationOfInnerLayer::CharClassifier(ref char_ranges) => {
-                GenInvocationOfInnerLayer::CharClassifier {
+                Some(GenInvocationOfInnerLayer {
+                    lexer_name: CHAR_CLASSIFIER_MACRO_NAME.to_ident(),
+                    lexer_tts: vec![],
+                    str_lhs: vec![],
+                    str_rhs: vec![],
                     char_range_lhs: char_ranges.iter().map(|&(_, sym)| {
                         self.ir.name_of_external(sym).unwrap().to_ident()
                     }).collect(),
                     char_ranges: char_ranges.iter().map(|&(range, _)| {
                         range
                     }).collect(),
-                }
+                })
             }
             &InvocationOfInnerLayer::None => {
-                GenInvocationOfInnerLayer::None
+                None
             }
         };
         // Names of all internal symbols

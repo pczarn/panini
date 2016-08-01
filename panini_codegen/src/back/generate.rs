@@ -38,7 +38,7 @@ pub struct GenParser {
     pub arguments_from_outer_layer: Option<GenArgumentsFromOuterLayer>,
 
     // For declaring the inner layer
-    pub inner_layer: GenInvocationOfInnerLayer,
+    pub inner_layer: Option<GenInvocationOfInnerLayer>,
     pub inner_layer_level: u32,
 
     // For tracing
@@ -69,21 +69,13 @@ pub struct GenArgumentsFromOuterLayer {
 }
 
 #[derive(Eq, PartialEq)]
-pub enum GenInvocationOfInnerLayer {
-    Invoke(GenInvoke),
-    CharClassifier {
-        char_range_lhs: Vec<rs::ast::Ident>,
-        char_ranges: Vec<ClassRange>,
-    },
-    None,
-}
-
-#[derive(Eq, PartialEq)]
-pub struct GenInvoke {
+pub struct GenInvocationOfInnerLayer {
     pub lexer_name: rs::ast::Ident,
     pub lexer_tts: Vec<rs::TokenTree>,
     pub str_lhs: Vec<rs::ast::Ident>,
     pub str_rhs: Vec<rs::Name>,
+    pub char_range_lhs: Vec<rs::ast::Ident>,
+    pub char_ranges: Vec<ClassRange>,
 }
 
 // Nulling rules
@@ -1076,7 +1068,7 @@ impl GenParser {
 
     pub fn translate_lexer_def(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
         // Conditionally compile
-        let item = if self.inner_layer == GenInvocationOfInnerLayer::None {
+        let item = if self.inner_layer.is_none() {
             self.translate_identity(cx)
         } else {
             self.translate_lexer_invocation(cx)
@@ -1105,55 +1097,49 @@ impl GenParser {
     }
 
     fn translate_lexer_invocation(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
+        // Creates a literal as a Rust token from a char value.
+        fn to_char_literal(num: char) -> rs::TokenTree {
+            rs::TokenTree::Token(
+                rs::DUMMY_SP,
+                rs::Token::Literal(
+                    rs::token::Char(rs::intern(&*num.to_string())),
+                    None
+                )
+            )
+        }
         // Prepend an attribute.
         // Pass this parser's terminal names to this parser's lexer.
         let lexer_attr = format!("lexer_{}", self.inner_layer_level).to_ident();
         let terminal_names = self.terminal_names.iter();
-        // Quote
-        match &self.inner_layer {
-            &GenInvocationOfInnerLayer::Invoke(ref invoke) => {
-                let &GenInvoke { lexer_name, ref lexer_tts, ref str_lhs, ref str_rhs } = invoke;
-                // Turn into iterators.
-                let str_lhs = str_lhs.iter();
-                let str_rhs_exprs = str_rhs.iter().map(|rhs| self.builder.expr().str(rhs));
-                // The lexer invocation.
-                quote_tokens! {cx,
-                    // ########### QUOTED CODE #########################
-                    $lexer_name! {
-                        #![$lexer_attr($($terminal_names),*)]
-                        $(
-                            $str_lhs ::= $str_rhs_exprs;
-                        )*
-                        $lexer_tts
-                    }
-                    // ########### END QUOTED CODE
-                }
+        // Get the invocation.
+        let invoc = self.inner_layer.as_ref().unwrap();
+        let &GenInvocationOfInnerLayer { lexer_name, ref lexer_tts, .. } = invoc;
+        // Turn implicit string rules into iterators.
+        let str_lhs = invoc.str_lhs.iter();
+        let str_rhs_exprs = invoc.str_rhs.iter().map(|rhs| self.builder.expr().str(rhs));
+        // Char ranges. Only present with implicit char_classifier.
+        let char_range_lhs = invoc.char_range_lhs.iter();
+        let start = invoc.char_ranges.iter().map(|range| range.start).map(to_char_literal);
+        let end = invoc.char_ranges.iter().map(|range| range.end).map(to_char_literal);
+        // The lexer invocation.
+        quote_tokens! {cx,
+            // ########### QUOTED CODE #########################
+            // Inner layer.
+            $lexer_name! {
+                // Arguments for the inner layer.
+                #![$lexer_attr($($terminal_names),*)]
+                // Implicit string rules.
+                $(
+                    $str_lhs ::= $str_rhs_exprs;
+                )*
+                // Implicit char ranges. Only present with an implicit char_classifier.
+                $(
+                    $char_range_lhs ::= $start ... $end;
+                )*
+                // Explicit code.
+                $lexer_tts
             }
-            &GenInvocationOfInnerLayer::CharClassifier { ref char_range_lhs, ref char_ranges } => {
-                fn to_char_literal(num: char) -> rs::TokenTree {
-                    rs::TokenTree::Token(
-                        rs::DUMMY_SP,
-                        rs::Token::Literal(
-                            rs::token::Char(rs::intern(&*num.to_string())),
-                            None
-                        )
-                    )
-                }
-                let char_range_lhs = char_range_lhs.iter();
-                let start = char_ranges.iter().map(|range| range.start).map(to_char_literal);
-                let end = char_ranges.iter().map(|range| range.end).map(to_char_literal);
-                quote_tokens! {cx,
-                    // ########### QUOTED CODE #########################
-                    char_classifier! {
-                        #![$lexer_attr($($terminal_names),*)]
-                        $(
-                            $char_range_lhs ::= $start ... $end;
-                        )*
-                    }
-                    // ########### END QUOTED CODE
-                }
-            }
-            _ => unreachable!()
+            // ########### END QUOTED CODE
         }
     }
 }
