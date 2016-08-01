@@ -6,39 +6,102 @@ use aster::AstBuilder;
 use aster::ident::ToIdent;
 
 use cfg::symbol::Symbol;
+use cfg_regex::ClassRange;
 use gearley::grammar::InternalGrammarParts;
 
 use rs;
-use middle::LowerLevel;
-use back::IrTranslator;
 
 // Info for generation.
 
-pub struct GenParser<'a> {
-    pub trans: &'a IrTranslator,
+pub struct GenParser {
+    // Serialized grammar
     pub grammar_parts: InternalGrammarParts,
-    pub null: GenNulling,
+
+    // Properties of the start symbol
+    pub start_variant: rs::ast::Ident,
+    pub start_type: GenType,
+
+    // For actions
+    pub epsilon_actions: GenEpsilonActions,
     pub rules: Vec<GenRule>,
     pub sequences: Vec<GenSequence>,
+
+    // Forest node variants with their inner types.
+    pub variant_map: Vec<(rs::ast::Ident, rs::P<rs::Ty>)>,
+
+    // For terminals
+    pub terminal_names: Vec<rs::ast::Ident>,
+    pub terminal_ids: Vec<usize>,
+
+    // For passing evaluated pieces to the outer layer, when the outer layer's
+    // terminals are parsed.
+    pub arguments_from_outer_layer: Option<GenArgumentsFromOuterLayer>,
+
+    // For declaring the inner layer
+    pub inner_layer: GenInvocationOfInnerLayer,
+    pub inner_layer_level: u32,
+
+    // For tracing
+    pub trace_rule_ids: Vec<u32>,
+    pub trace_rule_pos: Vec<Vec<u32>>,
+    pub trace_tokens: Vec<Vec<String>>,
+
+    // Names of all internal symbols
+    pub sym_names: Vec<String>,
+
+    // For automatic AST
+    pub item_definitions: Vec<rs::P<rs::Item>>,
+
+    // Names of type parameters to be inferred: I0, I1, I2, etc.
+    pub infer: Vec<rs::ast::Ident>,
+
+    // This layer's item names
     pub unique_names: UniqueNames,
+
+    // aster's builder
+    pub builder: AstBuilder,
+}
+
+pub struct GenArgumentsFromOuterLayer {
+    pub terminal_names: Vec<rs::ast::Ident>,
+    pub terminal_variants: Vec<rs::InternedString>,
+    pub terminal_bare_variants: Vec<rs::ast::Ident>,
+}
+
+#[derive(Eq, PartialEq)]
+pub enum GenInvocationOfInnerLayer {
+    Invoke(GenInvoke),
+    CharClassifier {
+        char_range_lhs: Vec<rs::ast::Ident>,
+        char_ranges: Vec<ClassRange>,
+    },
+    None,
+}
+
+#[derive(Eq, PartialEq)]
+pub struct GenInvoke {
+    pub lexer_name: rs::ast::Ident,
+    pub lexer_tts: Vec<rs::TokenTree>,
+    pub str_lhs: Vec<rs::ast::Ident>,
+    pub str_rhs: Vec<rs::Name>,
 }
 
 // Nulling rules
 
-pub struct GenNulling {
-    pub rules: Vec<GenNullingRule>,
-    pub roots: Vec<GenNullingRoot>,
+pub struct GenEpsilonActions {
+    pub rules: Vec<GenEpsilonIntermediateRule>,
+    pub roots: Vec<GenEpsilonRootAction>,
     pub continuation_label: rs::ast::Ident,
 }
 
 #[derive(Debug)]
-pub struct GenNullingRule {
+pub struct GenEpsilonIntermediateRule {
     pub name: rs::ast::Ident,
     pub blocks: Vec<rs::P<rs::Block>>,
 }
 
 #[derive(Debug)]
-pub struct GenNullingRoot {
+pub struct GenEpsilonRootAction {
     // This symbol must be internal
     pub sym: Symbol,
     pub num: usize,
@@ -68,6 +131,20 @@ pub struct GenSequence {
     pub id: u32,
     pub elem_variant: rs::ast::Ident,
     pub variant: rs::ast::Ident,
+}
+
+// Type
+
+#[derive(Clone)]
+pub enum GenType {
+    RustTy(rs::P<rs::Ty>),
+    Vec(Box<GenType>),
+    Unit,
+    Tuple(Vec<GenType>),
+    Identifier(rs::ast::Ident),
+    Item(rs::ast::Ident),
+    Infer(rs::ast::Ident),
+    Terminal,
 }
 
 //------------------------------
@@ -148,94 +225,21 @@ pub enum GenResult {
     Lexer(Vec<rs::Stmt>),
 }
 
-impl<'a> GenParser<'a> {
+impl GenParser {
     pub fn translate(&self, cx: &mut rs::ExtCtxt) -> GenResult {
         let common_defs = self.translate_common_defs(cx);
-        let UniqueNames {
-            UpperValue, Value, Layer, UpperTerminalAccessor,
-            ValueInfer, InferTreeVal,
-            layer_macro, lower_layer_macro, ..
-        } = self.unique_names;
-        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        let lexer_def = self.translate_lexer_def(cx);
 
-        if self.trans.ir.lexer_for_upper.is_some() {
+        if let &Some(ref arguments_from_outer_layer) = &self.arguments_from_outer_layer {
             let lexer_builder_def = self.translate_lexer_builder_def(cx);
-            let lexer_lexer_def = self.translate_lexer_def(cx);
-            let traversal = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).traversal};
-            let store = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).store};
-            let closure = self.translate_closure(cx, traversal, store);
-
-            let lexer_for_upper = self.trans.ir.lexer_for_upper.as_ref().unwrap();
-            let upper_terminal = lexer_for_upper.terminals().iter().map(|&sym|
-                self.trans.ir.name_of_external(sym).unwrap().to_ident()
-            );
-            let variant = lexer_for_upper.terminals().iter().map(|&sym|
-                self.trans.variant_names[&sym].name.as_str()
-            ).collect::<Vec<_>>();
-            let bare_variant = variant.clone().into_iter().map(|name|
-                (&name[.. name.rfind("_").unwrap()]).to_ident()
-            );
-            let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
-                                  .take(self.trans.infer.len());
-            let variant = variant.into_iter().map(|s| (&*s).to_ident());
+            let layer_macro_def = self.translate_layer_macro_def(cx, arguments_from_outer_layer);
 
             let block = quote_block!(cx, {
                 // ########### QUOTED CODE
                 $common_defs
                 $lexer_builder_def
-                $lexer_lexer_def
-
-                macro_rules! $layer_macro {
-                    (
-                        @closure
-                        $dol upper_builder:expr,
-                        $dol parse:expr,
-                        $dol node:expr;
-                    ) => ({
-                        // Assist the inference.
-                        {
-                            let _: &::std::marker::PhantomData<
-                                $InferTreeVal<_, _, $ValueInfer<_, $($infer_wildcards),*>>
-                            > = &$lower_layer_macro!(@get $dol parse).inference_marker;
-                        };
-                        let upper_builder = &mut $dol upper_builder;
-                        let sym = ($dol node).terminal;
-                        let root = ($dol node).value;
-                        // === Deeper code
-                        $closure
-                        // === Result
-                        let result = match root.get() {
-                            Evaluated { values } => values,
-                            _ => unreachable!()
-                        };
-                        upper_builder.reserve(result.len());
-                        let upper_terminals = $UpperTerminalAccessor;
-                        $(
-                            if sym == upper_terminals.$upper_terminal() {
-                                for value in result {
-                                    let inner = if let $Value::$variant(inner) = value.clone() {
-                                        inner
-                                    } else {
-                                        unreachable!()
-                                    };
-                                    upper_builder.push($UpperValue::$bare_variant(inner));
-                                }
-                            }
-                        )else*
-                        else {
-                            unreachable!("wrong sym")
-                        }
-                    });
-                    (@builder @factory [$dol factory:expr] @closure [$dol closure:expr]) => (
-                        $lower_layer_macro!(@builder
-                            @factory [$Layer::new().with_parse_builder($dol factory)]
-                            @closure [$dol closure]
-                        )
-                    );
-                    (@get $dol parse:expr) => (
-                        $lower_layer_macro!(@get $dol parse.parse)
-                    )
-                }
+                $lexer_def
+                $layer_macro_def
                 // ########### END QUOTED CODE
             });
             let stmts = block.unwrap().unwrap().stmts;
@@ -243,7 +247,6 @@ impl<'a> GenParser<'a> {
         } else {
             let parse_builder_def = self.translate_parse_builder_def(cx);
             let parse_def = self.translate_parse_def(cx);
-
             let parse_builder = self.translate_parse_builder(cx);
 
             let expr = quote_expr!(cx, {
@@ -253,7 +256,7 @@ impl<'a> GenParser<'a> {
                 $common_defs
                 $parse_builder_def
                 $parse_def
-
+                $lexer_def
                 $parse_builder
                 // ########### END QUOTED CODE
             });
@@ -262,20 +265,16 @@ impl<'a> GenParser<'a> {
     }
 
     pub fn translate_common_defs(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
-        let variant_name = self.trans.variant_map.iter().map(|v| &v.0);
-        let variant_type = self.trans.variant_map.iter().map(|v| &v.1);
-        let item_definitions = self.trans.item_definitions.iter();
+        let variant_name = self.variant_map.iter().map(|v| &v.0);
+        let variant_type = self.variant_map.iter().map(|v| &v.1);
+        let item_definitions = self.item_definitions.iter();
         // Macro definitions.
-        let null_bind_name = self.null.rules.iter().map(|r| r.name);
-        let null_actions = self.null.rules.iter().map(|r| r.blocks.iter());
-        let continuation_label = self.null.continuation_label;
+        let null_bind_name = self.epsilon_actions.rules.iter().map(|r| r.name);
+        let null_actions = self.epsilon_actions.rules.iter().map(|r| r.blocks.iter());
+        let continuation_label = self.epsilon_actions.continuation_label;
         
-        let terminal_name = self.trans.terminals.iter().map(|&terminal|
-            self.trans.ir.name_of_external(terminal).unwrap().to_ident()
-        );
-        let terminal_id = self.trans.terminals.iter().map(|&terminal|
-            self.trans.ir.internalize(terminal).unwrap().usize()
-        );
+        let terminal_name = self.terminal_names.iter();
+        let terminal_id = self.terminal_ids.iter();
 
         let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         let dol2 = dol.clone();
@@ -331,27 +330,19 @@ impl<'a> GenParser<'a> {
         } = self.grammar_parts;
         // Convert serialized data to a byte string literal.
         let storage_str = AstBuilder::new().expr().lit().byte_str(&storage[..]);
-        let trace_ids = self.trans.ir.trace_sources.iter().map(|source| source.rule_id);
-        let trace_map = self.trans.ir.trace_sources.iter().map(|source| source.rule_pos.iter());
-        let trace_tokens = self.trans.ir.trace_tokens.iter().map(|v| {
-            v.iter().map(|s| AstBuilder::new().expr().lit().str(&s[..]))
+        let trace_ids = self.trace_rule_ids.iter();
+        let trace_map = self.trace_rule_pos.iter().map(|v| v.iter());
+        let trace_tokens = self.trace_tokens.iter().map(|rule_tokens| {
+            rule_tokens.iter().map(|tok| AstBuilder::new().expr().lit().str(&tok[..]))
         });
 
-        let sym_names = (0 .. num_syms).map(|sym_id| {
-            let internal_sym = Symbol::from(sym_id);
-            let external_sym = self.trans.ir.externalize(internal_sym);
-            let sym_name = self.trans.ir.name_of_external(external_sym);
-            if let Some(sym_name) = sym_name {
-                AstBuilder::new().expr().lit().str(&sym_name.as_str()[..])
-            } else {
-                let sym_name = format!("g{}", sym_id);
-                AstBuilder::new().expr().lit().str(&sym_name[..])
-            }
+        let sym_names = self.sym_names.iter().map(|name| {
+            AstBuilder::new().expr().lit().str(&name[..])
         });
         // Convert a symbol to integer.
         let start_sym = start_sym.usize();
         // Use internal symbols.
-        let infer_name = self.trans.infer.iter();
+        let infer_name = self.infer.iter();
         let (i2, i3, i4, i5, i6, i7) = (infer_name.clone(), infer_name.clone(), infer_name.clone(),
             infer_name.clone(), infer_name.clone(), infer_name.clone());
 
@@ -478,11 +469,9 @@ impl<'a> GenParser<'a> {
         // Convert a symbol to integer.
         let start_sym = start_sym.usize();
         // Use internal symbols for terminals.
-        let super_terminals = self.trans.ir.lexer_for_upper.as_ref().unwrap().terminals();
-        let upper_terminal_name = super_terminals.iter().map(|&sym|
-            self.trans.ir.name_of_external(sym).unwrap().to_ident()
-        );
-        let infer_name = self.trans.infer.iter();
+        let arguments_from_outer_layer = self.arguments_from_outer_layer.as_ref().unwrap();
+        let outer_terminal_name = arguments_from_outer_layer.terminal_names.iter();
+        let infer_name = self.infer.iter();
         let (i2, i3, i4, i5, i6, i7) = (infer_name.clone(), infer_name.clone(), infer_name.clone(),
             infer_name.clone(), infer_name.clone(), infer_name.clone());
 
@@ -595,7 +584,7 @@ impl<'a> GenParser<'a> {
                         // Declare tokens.
                         let upper_terminals = $UpperTerminalAccessor;
                         let tokens = &[
-                            $(upper_terminals.$upper_terminal_name()),*
+                            $(upper_terminals.$outer_terminal_name()),*
                         ];
                         // Parse the finished part in the upper layer.
                         self.parse.begin_earleme();
@@ -729,10 +718,11 @@ impl<'a> GenParser<'a> {
     }
 
     pub fn translate_parse_def(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
-        let external_start = self.trans.ir.externalize(self.trans.ir.grammar.get_start());
-        let start_type = &self.trans.type_map[&external_start]
-                         .generate_qualified(self.trans.builder, self.unique_names.Infer);
-        let start_variant = &self.trans.variant_names[&external_start];
+        // let external_start = self.trans.ir.externalize(self.trans.ir.grammar.get_start());
+
+        let start_type = self.start_type
+                         .generate_qualified(self.builder, self.unique_names.Infer);
+        let start_variant = self.start_variant;
 
         let UniqueNames {
             Parse, Value, InferTree, ..
@@ -839,6 +829,128 @@ impl<'a> GenParser<'a> {
         }
     }
 
+    pub fn translate_parse_builder(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
+        let UniqueNames {
+            ValueInfer, InferTreeVal, Parse, ParseFactory, lower_layer_macro, ..
+        } = self.unique_names;
+
+        let traversal = quote_tokens! {cx, traversal};
+        let store = quote_tokens! {cx, store};
+        let closure = self.translate_closure(cx, traversal, store);
+        let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
+                              .take(self.infer.len());
+
+        quote_tokens! {cx,
+            // ########### QUOTED CODE #########################
+            $lower_layer_macro!(@builder
+                @factory [$ParseFactory::new()]
+                @closure [|mut parse| {
+                    {
+                        // Partially guide the inference of the argument's type.
+                        let _: &$Parse<
+                            $InferTreeVal<_, $ValueInfer<_, $($infer_wildcards),*>>
+                        > = &*$lower_layer_macro!(@get parse);
+                    };
+                    let &mut $Parse {
+                        ref mut traversal,
+                        ref store,
+                        finished_node,
+                        ref mut result,
+                        ..
+                    } = &mut *$lower_layer_macro!(@get parse);
+                    let root = finished_node.unwrap();
+                    // ===
+                    $closure
+                    // ===
+                    *result = match root.get() {
+                        Evaluated { values } => values.iter(),
+                        _ => unreachable!()
+                    };
+                }])
+            // ########### END QUOTED CODE
+        }
+    }
+
+    pub fn translate_layer_macro_def(&self, cx: &mut rs::ExtCtxt, arguments_from_outer_layer: &GenArgumentsFromOuterLayer) -> Vec<rs::TokenTree> {
+        let UniqueNames {
+            UpperValue, Value, Layer, UpperTerminalAccessor, ValueInfer, InferTreeVal,
+            layer_macro, lower_layer_macro, ..
+        } = self.unique_names;
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
+        // cannot put these in variables, because that would cause a compilation error.
+        let traversal = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).traversal};
+        let store = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).store};
+        let closure = self.translate_closure(cx, traversal, store);
+        // Terminals and their variants
+        let &GenArgumentsFromOuterLayer {
+            terminal_names: ref terminal_names,
+            terminal_variants: ref terminal_variants,
+            terminal_bare_variants: ref terminal_bare_variant,
+        } = arguments_from_outer_layer;
+        let terminal_names = terminal_names.iter();
+        let terminal_variants = terminal_variants.iter().map(|interned_str| {
+            (&**interned_str).to_ident()
+        });
+        let terminal_bare_variant = terminal_bare_variant.iter();
+        // Wildcards
+        let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
+                              .take(self.infer.len());
+        quote_tokens! {cx,
+            macro_rules! $layer_macro {
+                (
+                    @closure
+                    $dol upper_builder:expr,
+                    $dol parse:expr,
+                    $dol node:expr;
+                ) => ({
+                    // Assist the inference.
+                    {
+                        let _: &::std::marker::PhantomData<
+                            $InferTreeVal<_, _, $ValueInfer<_, $($infer_wildcards),*>>
+                        > = &$lower_layer_macro!(@get $dol parse).inference_marker;
+                    };
+                    let upper_builder = &mut $dol upper_builder;
+                    let sym = ($dol node).terminal;
+                    let root = ($dol node).value;
+                    // === Deeper code
+                    $closure
+                    // === Result
+                    let result = match root.get() {
+                        Evaluated { values } => values,
+                        _ => unreachable!()
+                    };
+                    upper_builder.reserve(result.len());
+                    let upper_terminals = $UpperTerminalAccessor;
+                    $(
+                        if sym == upper_terminals.$terminal_names() {
+                            for value in result {
+                                let inner =
+                                if let $Value::$terminal_variants(inner) = value.clone() {
+                                    inner
+                                } else {
+                                    unreachable!()
+                                };
+                                upper_builder.push($UpperValue::$terminal_bare_variant(inner));
+                            }
+                        }
+                    )else*
+                    else {
+                        unreachable!("wrong sym")
+                    }
+                });
+                (@builder @factory [$dol factory:expr] @closure [$dol closure:expr]) => (
+                    $lower_layer_macro!(@builder
+                        @factory [$Layer::new().with_parse_builder($dol factory)]
+                        @closure [$dol closure]
+                    )
+                );
+                (@get $dol parse:expr) => (
+                    $lower_layer_macro!(@get $dol parse.parse)
+                )
+            }
+        }
+    }
+
     pub fn translate_closure(
         &self,
         cx: &mut rs::ExtCtxt,
@@ -857,11 +969,11 @@ impl<'a> GenParser<'a> {
         let seq_element_variant = self.sequences.iter().map(|s| &s.elem_variant);
         let seq_variant = self.sequences.iter().map(|s| &s.variant);
 
-        let null_symbol_id = self.null.roots.iter().map(|root| root.sym.usize());
+        let null_symbol_id = self.epsilon_actions.roots.iter().map(|root| root.sym.usize());
         // All lengths are non-zero
-        let null_num_summands = self.null.roots.iter().map(|root| root.num);
-        let null_sym_name = self.null.roots.iter().map(|root| root.name);
-        let null_variant = self.null.roots.iter().map(|root| root.variant_name);
+        let null_num_summands = self.epsilon_actions.roots.iter().map(|root| root.num);
+        let null_sym_name = self.epsilon_actions.roots.iter().map(|root| root.name);
+        let null_variant = self.epsilon_actions.roots.iter().map(|root| root.variant_name);
 
         let UniqueNames { Value, lower_layer_macro, .. } = self.unique_names;
         let Value_ = Value;
@@ -962,55 +1074,9 @@ impl<'a> GenParser<'a> {
         }
     }
 
-    pub fn translate_parse_builder(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
-        let UniqueNames {
-            ValueInfer, InferTreeVal,
-            Parse, ParseFactory, lower_layer_macro, ..
-        } = self.unique_names;
-
-        let lexer_def = self.translate_lexer_def(cx);
-        let traversal = quote_tokens! {cx, traversal};
-        let store = quote_tokens! {cx, store};
-        let closure = self.translate_closure(cx, traversal, store);
-        let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
-                              .take(self.trans.infer.len());
-
-        quote_tokens! {cx,
-            // ########### QUOTED CODE #########################
-            $lexer_def
-
-            $lower_layer_macro!(@builder
-                @factory [$ParseFactory::new()]
-                @closure [|mut parse| {
-                    {
-                        // Partially guide the inference of the argument's type.
-                        let _: &$Parse<
-                            $InferTreeVal<_, $ValueInfer<_, $($infer_wildcards),*>>
-                        > = &*$lower_layer_macro!(@get parse);
-                    };
-                    let &mut $Parse {
-                        ref mut traversal,
-                        ref store,
-                        finished_node,
-                        ref mut result,
-                        ..
-                    } = &mut *$lower_layer_macro!(@get parse);
-                    let root = finished_node.unwrap();
-                    // ===
-                    $closure
-                    // ===
-                    *result = match root.get() {
-                        Evaluated { values } => values.iter(),
-                        _ => unreachable!()
-                    };
-                }])
-            // ########### END QUOTED CODE
-        }
-    }
-
     pub fn translate_lexer_def(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
         // Conditionally compile
-        let item = if self.trans.ir.lower_level == LowerLevel::None {
+        let item = if self.inner_layer == GenInvocationOfInnerLayer::None {
             self.translate_identity(cx)
         } else {
             self.translate_lexer_invocation(cx)
@@ -1041,68 +1107,125 @@ impl<'a> GenParser<'a> {
     fn translate_lexer_invocation(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
         // Prepend an attribute.
         // Pass this parser's terminal names to this parser's lexer.
-        let terminal_name = self.trans.terminals.iter().map(|&terminal|
-            self.trans.ir.name_of_external(terminal).unwrap().to_ident()
-        );
-        let super_layer = self.trans.ir.lexer_for_upper.as_ref();
-        let lexer_level = super_layer.map_or(0, |lexer| lexer.level()) + 1;
-        let lexer_attr = format!("lexer_{}", lexer_level).to_ident();
+        let lexer_attr = format!("lexer_{}", self.inner_layer_level).to_ident();
+        let terminal_names = self.terminal_names.iter();
         // Quote
-        match &self.trans.ir.lower_level {
-            &LowerLevel::Invoke { ref lexer, ref embedded_strings } => {
-                let lexer_name = lexer.name().to_ident();
-                let lexer_tts = lexer.tts();
-                let mut tokens = quote_tokens!(cx, #![$lexer_attr($($terminal_name),*)]);
-                for string in embedded_strings {
-                    let lhs = self.trans.ir.name_of_external(string.0.node).unwrap().to_ident();
-                    let rhs = self.trans.builder.expr().str(string.1.node);
-                    let stmt_tokens = quote_tokens! {cx,
-                        $lhs ::= $rhs;
-                    };
-                    tokens.extend(stmt_tokens);
-                }
-                tokens.extend(lexer_tts.into_iter());
+        match &self.inner_layer {
+            &GenInvocationOfInnerLayer::Invoke(ref invoke) => {
+                let &GenInvoke { lexer_name, ref lexer_tts, ref str_lhs, ref str_rhs } = invoke;
+                // Turn into iterators.
+                let str_lhs = str_lhs.iter();
+                let str_rhs_exprs = str_rhs.iter().map(|rhs| self.builder.expr().str(rhs));
                 // The lexer invocation.
                 quote_tokens! {cx,
                     // ########### QUOTED CODE #########################
-                    $lexer_name! { $tokens }
-                    // ########################### END QUOTED CODE
+                    $lexer_name! {
+                        #![$lexer_attr($($terminal_names),*)]
+                        $(
+                            $str_lhs ::= $str_rhs_exprs;
+                        )*
+                        $lexer_tts
+                    }
+                    // ########### END QUOTED CODE
                 }
             }
-            &LowerLevel::CharClassifier(ref char_ranges) => {
-                let lhs = char_ranges.iter().map(|range| {
-                    self.trans.ir.name_of_external(range.1).unwrap().to_ident()
-                });
-                let start = char_ranges.iter().map(|range| {
+            &GenInvocationOfInnerLayer::CharClassifier { ref char_range_lhs, ref char_ranges } => {
+                fn to_char_literal(num: char) -> rs::TokenTree {
                     rs::TokenTree::Token(
                         rs::DUMMY_SP,
                         rs::Token::Literal(
-                            rs::token::Char(rs::intern(&*range.0.start.to_string())),
+                            rs::token::Char(rs::intern(&*num.to_string())),
                             None
                         )
                     )
-                });
-                let end = char_ranges.iter().map(|range| {
-                    rs::TokenTree::Token(
-                        rs::DUMMY_SP,
-                        rs::Token::Literal(
-                            rs::token::Char(rs::intern(&*range.0.end.to_string())),
-                            None
-                        )
-                    )
-                });
+                }
+                let char_range_lhs = char_range_lhs.iter();
+                let start = char_ranges.iter().map(|range| range.start).map(to_char_literal);
+                let end = char_ranges.iter().map(|range| range.end).map(to_char_literal);
                 quote_tokens! {cx,
-                    // ########### QUOTED CODE
+                    // ########### QUOTED CODE #########################
                     char_classifier! {
-                        #![$lexer_attr($($terminal_name),*)]
+                        #![$lexer_attr($($terminal_names),*)]
                         $(
-                            $lhs ::= $start ... $end;
+                            $char_range_lhs ::= $start ... $end;
                         )*
                     }
-                    // END QUOTED CODE
+                    // ########### END QUOTED CODE
                 }
             }
             _ => unreachable!()
+        }
+    }
+}
+
+impl GenType {
+    pub fn generate(&self, builder: AstBuilder) -> rs::P<rs::Ty> {
+        match self {
+            &GenType::RustTy(ref ty) => ty.clone(),
+            &GenType::Unit => builder.ty().unit(),
+            &GenType::Identifier(name) => builder.ty().id(name),
+            &GenType::Tuple(ref fields) => {
+                let mut ty_build = builder.ty().tuple();
+                for field in fields {
+                    ty_build = ty_build.with_ty(field.generate(builder));
+                }
+                ty_build.build()
+            }
+            &GenType::Item(name) => {
+                builder.ty().path().segment(name).with_generics(
+                    builder.generics().ty_param("I").build().build()
+                ).build().build()
+            }
+            &GenType::Vec(ref elem_ty) => {
+                builder.ty()
+                    .path()
+                        .segment("Vec").with_ty(elem_ty.generate(builder)).build()
+                    .build()
+            }
+            &GenType::Infer(name) => {
+                builder.ty().path().id("I").id(&name).build()
+            }
+            &GenType::Terminal => {
+                builder.ty().path().id("I").id("T").build()
+            }
+        }
+    }
+
+    pub fn generate_qualified(&self, builder: AstBuilder, infer_trait: rs::ast::Ident)
+        -> rs::P<rs::Ty>
+    {
+        match self {
+            &GenType::Tuple(ref fields) => {
+                let mut ty_build = builder.ty().tuple();
+                for field in fields {
+                    ty_build = ty_build.with_ty(field.generate_qualified(builder, infer_trait));
+                }
+                ty_build.build()
+            }
+            &GenType::Item(name) => {
+                builder.ty().
+                    path().segment(name).ty().path().id("I").id("Infer").build().build()
+                .build()
+            }
+            &GenType::Vec(ref elem_ty) => {
+                builder.ty()
+                    .path()
+                        .segment("Vec")
+                            .with_ty(elem_ty.generate_qualified(builder, infer_trait))
+                        .build()
+                    .build()
+            }
+            &GenType::Infer(name) => {
+                builder.ty()
+                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
+                    .id(name)
+            }
+            &GenType::Terminal => {
+                builder.ty()
+                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
+                    .id("T")
+            }
+            _ => self.generate(builder)
         }
     }
 }

@@ -1,6 +1,7 @@
 pub mod action;
 pub mod attr;
 pub mod error;
+pub mod embedded_string;
 pub mod fold;
 pub mod hir;
 pub mod ir;
@@ -10,7 +11,7 @@ pub mod ty;
 pub mod lint;
 pub mod warn;
 
-pub use self::ir::{Ir, LowerLevel};
+pub use self::ir::{Ir, InvocationOfInnerLayer};
 pub use self::hir::{Hir, SymbolicName, SpannedSymbolicName};
 pub use self::action::{Action, ActionExpr};
 pub use self::fold::{Folder, FoldHir};

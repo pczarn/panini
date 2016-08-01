@@ -160,6 +160,6 @@ fn test_sequence_ir() {
     ];
     assert_eq!(result.basic_rules, expected_actions);
     // Check layering
-    assert!(result.lexer_for_upper.is_none());
-    assert_eq!(result.lower_level, LowerLevel::None);
+    assert!(result.arguments_from_outer_layer.is_none());
+    assert_eq!(result.invocation_of_inner_layer, InvocationOfInnerLayer::None);
 }

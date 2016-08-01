@@ -7,6 +7,7 @@ use cfg::symbol::{Symbol, SymbolSource};
 use rs;
 
 use middle::{Ty, AutoTy, Hir, Rule, FoldRule, SymbolicName};
+use middle::embedded_string::EmbeddedString;
 
 pub trait FoldHir<S1>: FoldRule<S1>
     where S1: Eq + Hash
@@ -23,8 +24,12 @@ pub trait FoldHir<S1>: FoldRule<S1>
                     (self.fold_symbol(sym), self.fold_ty(ty))
                 }).collect()
             ),
-            embedded_strings: hir.embedded_strings.into_iter().map(|(sym, string, source_origin)| {
-                (self.fold_spanned_symbol(sym), string, source_origin)
+            embedded_strings: hir.embedded_strings.into_iter().map(|embedded| {
+                EmbeddedString {
+                    symbol: self.fold_spanned_symbol(embedded.symbol),
+                    string: embedded.string,
+                    source: embedded.source,
+                }
             }).collect(),
         }
     }

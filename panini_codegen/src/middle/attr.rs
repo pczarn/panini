@@ -8,15 +8,17 @@ use middle::error::TransformationError;
 use middle::lint::{Lint, Level};
 
 pub struct Attrs<S> {
-    lexer_for_upper: Option<LexerForUpper<S>>,
+    arguments_from_outer_layer: Option<ArgumentsFromOuterLayer<S>>,
     lint_levels: HashMap<rs::InternedString, Level>,
     pub overruled_lint: Vec<rs::Span>,
     pub invalid_lint: Vec<rs::Span>,
     pub unused_attrs: Vec<rs::Span>,
 }
 
+/// The outer layer invokes this layer, passing arguments. These arguments consist of
+/// this layer's level number and a list of terminals.
 #[derive(Clone)]
-pub struct LexerForUpper<S> {
+pub struct ArgumentsFromOuterLayer<S> {
     level: usize,
     terminals: Vec<S>,
 }
@@ -67,7 +69,7 @@ impl Attrs<rs::Name> {
             unused_attrs.push(attr.span);
         }
         // Map the lexer attr.
-        let lexer_for_upper = lexer_attr.map(|(lexer_level, list)| {
+        let arguments_from_outer_layer = lexer_attr.map(|(lexer_level, list)| {
             let level = lexer_level["lexer_".len() ..].parse().unwrap();
             let mut terminals = vec![];
             for word in list {
@@ -79,7 +81,7 @@ impl Attrs<rs::Name> {
                     _ => unreachable!() // error
                 }
             }
-            LexerForUpper {
+            ArgumentsFromOuterLayer {
                 level: level,
                 terminals: terminals,
             }
@@ -111,7 +113,7 @@ impl Attrs<rs::Name> {
         }
 
         Ok(Attrs {
-            lexer_for_upper: lexer_for_upper,
+            arguments_from_outer_layer: arguments_from_outer_layer,
             lint_levels: lint_levels,
             overruled_lint: overruled_lint,
             invalid_lint: invalid_lint_attrs.into_iter().collect(),
@@ -125,8 +127,8 @@ impl<S> Attrs<S> {
         where F: Fn(S) -> S2
     {
         Attrs {
-            lexer_for_upper: self.lexer_for_upper.map(|lexer| {
-                LexerForUpper {
+            arguments_from_outer_layer: self.arguments_from_outer_layer.map(|lexer| {
+                ArgumentsFromOuterLayer {
                     level: lexer.level,
                     terminals: lexer.terminals.into_iter().map(f).collect(),
                 }
@@ -138,8 +140,8 @@ impl<S> Attrs<S> {
         }
     }
 
-    pub fn lexer_for_upper(&self) -> &Option<LexerForUpper<S>> {
-        &self.lexer_for_upper
+    pub fn arguments_from_outer_layer(&self) -> &Option<ArgumentsFromOuterLayer<S>> {
+        &self.arguments_from_outer_layer
     }
 
     pub fn get_lint_level(&self, lint: Lint) -> Level {
@@ -148,12 +150,12 @@ impl<S> Attrs<S> {
     }
 }
 
-impl<S> LexerForUpper<S> {
+impl<S> ArgumentsFromOuterLayer<S> {
     pub fn terminals(&self) -> &[S] {
         &self.terminals[..]
     }
 
-    pub fn level(&self) -> usize {
+    pub fn current_level(&self) -> usize {
         self.level
     }
 }

@@ -15,13 +15,13 @@ use cfg_regex::{RegexTranslation, ClassRange};
 
 use rs;
 use front::ast;
-use middle::{Action, ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy, SymbolicName};
-use middle::hir;
+use middle::{ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy, SymbolicName};
 use middle::error::{TransformationError, CycleWithCauses};
 use middle::trace::{Trace, SourceOrigin};
-use middle::attr::{Attrs, LexerForUpper};
+use middle::attr::{Attrs, ArgumentsFromOuterLayer};
 use middle::warn::{WarningCauses, WarningsWithContext};
 use middle::rule::{Rule, BasicRule};
+use middle::embedded_string::EmbeddedString;
 
 pub struct Ir {
     pub grammar: BinarizedGrammar,
@@ -33,8 +33,8 @@ pub struct Ir {
     pub maps: InternalExternalNameMap,
     pub assert_type_equality: Vec<(Symbol, Ty)>,
     // what the heck is LexerForUpper?
-    pub lexer_for_upper: Option<LexerForUpper<Symbol>>,
-    pub lower_level: LowerLevel,
+    pub arguments_from_outer_layer: Option<ArgumentsFromOuterLayer<Symbol>>,
+    pub invocation_of_inner_layer: InvocationOfInnerLayer,
     pub trace_tokens: Vec<Vec<String>>,
     pub trace_sources: Vec<SourceOrigin>,
 }
@@ -94,11 +94,14 @@ impl InternalExternalNameMap {
     }
 }
 
+/// Describes how the inner layer will be invoked. Most of the time, the inner layer
+/// is either a sub-grammar described by the grammar author, or an implicit invocation of
+/// a character classifier.
 #[derive(Debug, Eq, PartialEq)]
-pub enum LowerLevel {
+pub enum InvocationOfInnerLayer {
     Invoke {
-        lexer: Lexer,
-        embedded_strings: Vec<(rs::Spanned<Symbol>, rs::Spanned<SymbolicName>, SourceOrigin)>,
+        lexer_invocation: Lexer,
+        embedded_strings: Vec<EmbeddedString>,
     },
     CharClassifier(Vec<(ClassRange, Symbol)>),
     None
@@ -117,7 +120,7 @@ struct IrInitialHir {
     attrs: Attrs<SymbolicName>,
     errors: Vec<TransformationError>,
     // Final
-    lower_level: LowerLevel,
+    lower_level: InvocationOfInnerLayer,
     trace_tokens: Vec<Vec<String>>,
 }
 
@@ -128,7 +131,7 @@ struct IrFinalHir {
     attrs: Attrs<Symbol>,
     errors: Vec<TransformationError>,
     // Final
-    lower_level: LowerLevel,
+    lower_level: InvocationOfInnerLayer,
     trace_tokens: Vec<Vec<String>>,
     // what for? For getting lhs and rhs spans. Accessed by action ID.
     hir_rules_with_names: Vec<Rule<SymbolicName>>,
@@ -182,7 +185,7 @@ pub struct IrMapped {
 struct CommonPrepared {
     basic_rules: Vec<BasicRule>,
     attrs: Attrs<Symbol>,
-    lower_level: LowerLevel,
+    lower_level: InvocationOfInnerLayer,
     trace_tokens: Vec<Vec<String>>,
     trace_sources: Vec<SourceOrigin>,
     name_map: NameMap,
@@ -200,10 +203,10 @@ impl IrStmtsAndAttrs {
             return Err(TransformationError::GrammarIsEmpty);
         };
 
-        if let &Some(ref upper) = attrs.lexer_for_upper() {
+        if let &Some(ref from_outer) = attrs.arguments_from_outer_layer() {
             // Set the implicit start.
             let start = rs::gensym("_lower_start_");
-            for terminal in upper.terminals() {
+            for terminal in from_outer.terminals() {
                 stmts.stmts.push(ast::Stmt {
                     lhs: rs::dummy_spanned(start),
                     rhs: vec![(
@@ -249,13 +252,13 @@ impl IrInitialHir {
             rule_tokens
         }).collect();
 
-        let lower_level = if let Some(lexer) = ir.stmts.lexer {
-            LowerLevel::Invoke {
-                lexer: lexer,
+        let lower_level = if let Some(lexer_invocation) = ir.stmts.lexer {
+            InvocationOfInnerLayer::Invoke {
+                lexer_invocation: lexer_invocation,
                 embedded_strings: vec![]
             }
         } else {
-            LowerLevel::None
+            InvocationOfInnerLayer::None
         };
 
         Ok(IrInitialHir {
@@ -302,35 +305,35 @@ impl IrPrepared {
         let embedded_strings = hir.embedded_strings.clone();
         let lower_level = if !hir.embedded_strings.is_empty() {
             match ir.lower_level {
-                LowerLevel::Invoke { lexer, .. } => {
+                InvocationOfInnerLayer::Invoke { lexer_invocation, .. } => {
                     // Add strings to the lower level.
-                    LowerLevel::Invoke {
+                    InvocationOfInnerLayer::Invoke {
                         embedded_strings: embedded_strings,
-                        lexer: lexer,
+                        lexer_invocation: lexer_invocation,
                     }
                 }
-                LowerLevel::None => {
-                    if ir.attrs.lexer_for_upper().is_some() {
+                InvocationOfInnerLayer::None => {
+                    if ir.attrs.arguments_from_outer_layer().is_some() {
                         // We are at level 1 .. N and adding strings to the current level.
                         // Embedded strings are rewritten into rules. Character ranges are
                         // collected.
                         let mut regex_rewrite = RegexTranslation::new();
-                        for (symbol, string, source_origin) in embedded_strings {
+                        for embedded in embedded_strings {
                             let sym2 = regex_rewrite.rewrite_string(
                                 &mut grammar,
-                                &*string.node.as_str()
+                                &*embedded.string.node.as_str()
                             );
                             hir.rules.push(Rule::BnfRule {
-                                lhs: symbol,
+                                lhs: embedded.symbol,
                                 rhs: vec![rs::dummy_spanned(sym2)],
                                 tuple_binds: vec![],
                                 deep_binds: vec![],
                                 shallow_binds: vec![],
-                                source_origin: source_origin,
+                                source_origin: embedded.source,
                                 action: ActionExpr::Auto,
                             });
                             hir.type_map.insert(
-                                symbol.node,
+                                embedded.symbol.node,
                                 Ty::Auto(AutoTy::Tuple { fields: vec![] })
                             );
                         }
@@ -340,16 +343,16 @@ impl IrPrepared {
                             let name = rs::gensym(&*format!("ChRange{}", i));
                             ir.name_map.insert_padded(sym, name);
                         }
-                        LowerLevel::CharClassifier(char_ranges)
+                        InvocationOfInnerLayer::CharClassifier(char_ranges)
                     } else {
                         // We are at level 0 and adding strings to a newly created level 1.
-                        LowerLevel::Invoke {
-                            lexer: Lexer::new(rs::intern("grammar"), vec![]),
+                        InvocationOfInnerLayer::Invoke {
+                            lexer_invocation: Lexer::new(rs::intern("grammar"), vec![]),
                             embedded_strings: embedded_strings,
                         }
                     }
                 }
-                LowerLevel::CharClassifier(_) => unreachable!()
+                InvocationOfInnerLayer::CharClassifier(_) => unreachable!()
             }
         } else {
             ir.lower_level
@@ -644,8 +647,8 @@ impl From<IrMapped> for Ir {
             type_map: ir.common.hir.type_map,
             maps: ir.maps,
             assert_type_equality: ir.common.hir.assert_type_equality.into_inner(),
-            lexer_for_upper: ir.common.attrs.lexer_for_upper().clone(),
-            lower_level: ir.common.lower_level,
+            arguments_from_outer_layer: ir.common.attrs.arguments_from_outer_layer().clone(),
+            invocation_of_inner_layer: ir.common.lower_level,
             trace_tokens: ir.common.trace_tokens,
             trace_sources: ir.common.trace_sources,
         }

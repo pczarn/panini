@@ -60,7 +60,6 @@ fn test_simple_ir() {
     let mut expected_grammar = Grammar::new();
     let (start_sym, a_sym, b_sym) = expected_grammar.sym();
     expected_grammar.rule(start_sym).rhs([a_sym, b_sym]);
-    // let () = result.grammar.rules();
     support::assert_eq_rules(result.grammar.rules(), expected_grammar.rules().cloned());
     // Check nulling grammar
     let empty_grammar = Grammar::new();
@@ -105,6 +104,6 @@ fn test_simple_ir() {
     ];
     assert_eq!(result.basic_rules, expected_actions);
     // Check layering
-    assert!(result.lexer_for_upper.is_none());
-    assert_eq!(result.lower_level, LowerLevel::None);
+    assert!(result.arguments_from_outer_layer.is_none());
+    assert_eq!(result.invocation_of_inner_layer, InvocationOfInnerLayer::None);
 }

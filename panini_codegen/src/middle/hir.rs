@@ -9,6 +9,7 @@ use front::{ast, Name};
 use front::visit::RhsAstVisitor;
 use middle::{ActionExpr, Ty, AutoTy, Rule};
 use middle::trace::SourceOrigin;
+use middle::embedded_string::EmbeddedString;
 
 // how else name this?
 pub type SymbolicName = rs::Name;
@@ -23,7 +24,7 @@ pub struct Hir<S = Symbol> {
     pub type_map: HashMap<S, Ty<S>>,
     pub type_equality: Vec<(S, Ty<S>)>,
     pub assert_type_equality: RefCell<Vec<(S, Ty<S>)>>,
-    pub embedded_strings: Vec<(rs::Spanned<S>, Name, SourceOrigin)>,
+    pub embedded_strings: Vec<EmbeddedString<S>>,
 }
 
 impl Hir<SymbolicName> {
@@ -217,7 +218,7 @@ struct FlattenRhsAst {
     rule_stack: Vec<FlatRule>,
     new_rules: Vec<FlatRule>,
     new_sequences: Vec<FlatSequence>,
-    embedded_strings: Vec<(Name, Name, SourceOrigin)>,
+    embedded_strings: Vec<EmbeddedString<SymbolicName>>,
     rule_id: u32,
     cur_rule_pos: u32,
 }
@@ -364,14 +365,14 @@ impl RhsAstVisitor for FlattenRhsAst {
 
     fn visit_rhs_string(&mut self, string: Name) {
         let new_sym = rs::dummy_spanned(rs::gensym("GTerm"));
-        self.embedded_strings.push((
-            new_sym,
-            string,
-            SourceOrigin {
+        self.embedded_strings.push(EmbeddedString {
+            symbol: new_sym,
+            string: string,
+            source: SourceOrigin {
                 rule_id: self.rule_id,
                 rule_pos: vec![self.cur_rule_pos, self.cur_rule_pos + 1],
-            }
-        ));
+            },
+        });
         self.cur_rule_pos += 1;
         self.append_symbol(new_sym, false);
     }

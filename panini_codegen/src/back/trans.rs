@@ -27,15 +27,20 @@ use gearley::grammar::InternalGrammar;
 use rs;
 use middle::{Ir, Ty, AutoTy};
 use middle::action::{Action, ActionExpr};
+use middle::ir::InvocationOfInnerLayer;
 use back::generate::{
     GenParser,
-    GenNulling,
-    GenNullingRule,
-    GenNullingRoot,
+    GenEpsilonActions,
+    GenEpsilonIntermediateRule,
+    GenEpsilonRootAction,
     GenRule,
     GenArg,
     GenSequence,
-    UniqueNames
+    GenType,
+    GenArgumentsFromOuterLayer,
+    GenInvocationOfInnerLayer,
+    GenInvoke,
+    UniqueNames,
 };
 
 pub struct IrTranslator {
@@ -73,23 +78,12 @@ struct ComputedType {
     has_inference: bool,
 }
 
-#[derive(Clone)]
-pub enum GenType {
-    RustTy(rs::P<rs::Ty>),
-    Vec(Box<GenType>),
-    Unit,
-    Tuple(Vec<GenType>),
-    Identifier(rs::ast::Ident),
-    Item(rs::ast::Ident),
-    Infer(rs::ast::Ident),
-    Terminal,
-}
-
 // Creation
 
 impl IrTranslator {
     pub fn new(ir: Ir) -> Self {
-        let uniq_id = ir.lexer_for_upper.as_ref().map_or(0, |lexer| lexer.level());
+        let layer_id = ir.arguments_from_outer_layer.as_ref()
+                                                    .map_or(0, |layer| layer.current_level());
 
         let mut this = IrTranslator {
             ir: ir,
@@ -102,7 +96,7 @@ impl IrTranslator {
             infer: vec![],
             builder: AstBuilder::new(),
             terminals: vec![],
-            unique_names: UniqueNames::new(uniq_id),
+            unique_names: UniqueNames::new(layer_id),
         };
         this.compute_variant_map();
         this
@@ -342,85 +336,13 @@ impl IrTranslator {
     }
 }
 
-impl GenType {
-    pub fn generate(&self, builder: AstBuilder) -> rs::P<rs::Ty> {
-        match self {
-            &GenType::RustTy(ref ty) => ty.clone(),
-            &GenType::Unit => builder.ty().unit(),
-            &GenType::Identifier(name) => builder.ty().id(name),
-            &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate(builder));
-                }
-                ty_build.build()
-            }
-            &GenType::Item(name) => {
-                builder.ty().path().segment(name).with_generics(
-                    builder.generics().ty_param("I").build().build()
-                ).build().build()
-            }
-            &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec").with_ty(elem_ty.generate(builder)).build()
-                    .build()
-            }
-            &GenType::Infer(name) => {
-                builder.ty().path().id("I").id(&name).build()
-            }
-            &GenType::Terminal => {
-                builder.ty().path().id("I").id("T").build()
-            }
-        }
-    }
-
-    pub fn generate_qualified(&self, builder: AstBuilder, infer_trait: rs::ast::Ident)
-        -> rs::P<rs::Ty>
-    {
-        match self {
-            &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate_qualified(builder, infer_trait));
-                }
-                ty_build.build()
-            }
-            &GenType::Item(name) => {
-                builder.ty().
-                    path().segment(name).ty().path().id("I").id("Infer").build().build()
-                .build()
-            }
-            &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec")
-                            .with_ty(elem_ty.generate_qualified(builder, infer_trait))
-                        .build()
-                    .build()
-            }
-            &GenType::Infer(name) => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id(name)
-            }
-            &GenType::Terminal => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id("T")
-            }
-            _ => self.generate(builder)
-        }
-    }
-}
-
 // Generation, after the following things are computed:
 // * variant map, with variant names
 // * type equality assertions
 
 impl IrTranslator {
     pub fn generate(&mut self) -> GenParser {
-        let null = self.generate_nulling();
+        let epsilon_actions = self.generate_epsilon_actions();
 
         let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
             self.ir.grammar.clone(),
@@ -471,13 +393,123 @@ impl IrTranslator {
             }
         }
 
+        let terminal_names = self.terminals.iter().map(|&terminal| {
+            self.ir.name_of_external(terminal).unwrap().to_ident()
+        }).collect();
+        let terminal_ids = self.terminals.iter().map(|&terminal| {
+            self.ir.internalize(terminal).unwrap().usize()
+        }).collect();
+
+        let start = self.ir.grammar.get_start();
+        let external_start = self.ir.externalize(start);
+
+        let start_variant = self.variant_names[&external_start];
+        let start_type = self.type_map[&external_start].clone();
+
+        let grammar_parts = internal_grammar.to_parts();
+
+        let outer_layer = self.ir.arguments_from_outer_layer.as_ref();
+        let inner_layer_level = outer_layer.map_or(0, |layer| layer.current_level() as u32) + 1;
+
+        let arguments_from_outer_layer_opt = self.ir.arguments_from_outer_layer.as_ref().map(|arg| {
+            let terminal_names = arg.terminals().iter().map(|&sym| {
+                self.ir.name_of_external(sym).unwrap().to_ident()
+            }).collect();
+            let terminal_variants = arg.terminals().iter().map(|&sym| {
+                self.variant_names[&sym].name.as_str()
+            }).collect::<Vec<_>>();
+            let terminal_bare_variants = terminal_variants.iter().map(|name| {
+                (&name[.. name.rfind("_").unwrap()]).to_ident()
+            }).collect();
+            GenArgumentsFromOuterLayer {
+                terminal_names: terminal_names,
+                terminal_variants: terminal_variants,
+                terminal_bare_variants: terminal_bare_variants,
+            }
+        });
+
+        let inner_layer = match &self.ir.invocation_of_inner_layer {
+            &InvocationOfInnerLayer::Invoke { ref lexer_invocation, ref embedded_strings } => {
+                GenInvocationOfInnerLayer::Invoke(GenInvoke {
+                    lexer_name: lexer_invocation.name().to_ident(),
+                    lexer_tts: lexer_invocation.tts(),
+                    str_lhs: embedded_strings.iter().map(|embed| {
+                        self.ir.name_of_external(embed.symbol.node).unwrap().to_ident()
+                    }).collect(),
+                    str_rhs: embedded_strings.iter().map(|embed| {
+                        embed.string.node
+                    }).collect(),
+                })
+            }
+            &InvocationOfInnerLayer::CharClassifier(ref char_ranges) => {
+                GenInvocationOfInnerLayer::CharClassifier {
+                    char_range_lhs: char_ranges.iter().map(|&(_, sym)| {
+                        self.ir.name_of_external(sym).unwrap().to_ident()
+                    }).collect(),
+                    char_ranges: char_ranges.iter().map(|&(range, _)| {
+                        range
+                    }).collect(),
+                }
+            }
+            &InvocationOfInnerLayer::None => {
+                GenInvocationOfInnerLayer::None
+            }
+        };
+        // Names of all internal symbols
+        let sym_names = (0 .. grammar_parts.num_syms).map(|sym_id| {
+            let internal_sym = Symbol::from(sym_id);
+            let external_sym = self.ir.externalize(internal_sym);
+            let sym_name = self.ir.name_of_external(external_sym);
+            if let Some(sym_name) = sym_name {
+                sym_name.as_str().to_string()
+            } else {
+                format!("g{}", sym_id)
+            }
+        }).collect();
+        // Per-rule IDs
+        let trace_rule_ids = self.ir.trace_sources.iter().map(|source| {
+            source.rule_id
+        }).collect();
+        // Positions
+        let trace_rule_pos = self.ir.trace_sources.iter().map(|source| {
+            source.rule_pos.clone()
+        }).collect();
+        // Tokens
+        let trace_tokens = self.ir.trace_tokens.clone();
+        // Construct result
         GenParser {
-            trans: self,
-            grammar_parts: internal_grammar.to_parts(),
-            null: null,
+            grammar_parts: grammar_parts,
+
+            start_variant: start_variant,
+            start_type: start_type,
+
+            epsilon_actions: epsilon_actions,
             rules: processed_rule,
             sequences: processed_sequences,
+
+            variant_map: self.variant_map.clone(),
+
+            terminal_names: terminal_names,
+            terminal_ids: terminal_ids,
+
+            arguments_from_outer_layer: arguments_from_outer_layer_opt,
+
+            inner_layer_level: inner_layer_level,
+            inner_layer: inner_layer,
+
+            trace_rule_ids: trace_rule_ids,
+            trace_rule_pos: trace_rule_pos,
+            trace_tokens: trace_tokens,
+
+            sym_names: sym_names,
+
+            item_definitions: self.item_definitions.clone(),
+
+            infer: self.infer.clone(),
+
             unique_names: self.unique_names,
+
+            builder: self.builder,
         }
     }
 
@@ -593,7 +625,7 @@ impl IrTranslator {
         }
     }
 
-    fn generate_nulling(&mut self) -> GenNulling {
+    fn generate_epsilon_actions(&mut self) -> GenEpsilonActions {
         // Nulling rules
         // are these equal?
         let num_nulling_syms = self.ir.grammar.num_syms();
@@ -739,14 +771,15 @@ impl IrTranslator {
             let external_lhs = self.ir.externalize(lhs_sym);
             if !blocks.is_empty() {
                 let ident = self.lowercase_name(external_lhs);
-                rules.push(GenNullingRule {
+                rules.push(GenEpsilonIntermediateRule {
                     name: ident,
                     blocks: blocks
                 });
             }
             if num != 0 {
+                // This nulling forest is not empty.
                 let ident = self.lowercase_name(external_lhs);
-                roots.push(GenNullingRoot {
+                roots.push(GenEpsilonRootAction {
                     // This symbol must be internal
                     sym: lhs_sym,
                     num: num,
@@ -755,7 +788,7 @@ impl IrTranslator {
                 });
             }
         }
-        GenNulling {
+        GenEpsilonActions {
             rules: rules,
             roots: roots,
             continuation_label: continuation_label,

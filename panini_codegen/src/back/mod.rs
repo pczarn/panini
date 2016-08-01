@@ -5,4 +5,4 @@ pub mod trans;
 // The backend mostly uses internal symbols.
 
 pub use self::trans::IrTranslator;
-pub use self::generate::{GenResult, GenNulling};
+pub use self::generate::GenResult;
