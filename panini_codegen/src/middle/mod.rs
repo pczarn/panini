@@ -18,7 +18,3 @@ pub use self::fold::{Folder, FoldHir};
 pub use self::ty::{Ty, AutoTy};
 pub use self::rule::{Rule, FoldRule};
 pub use lexer::Lexer;
-
-use rs;
-
-// pub type Name = rs::Spanned<rs::Name>;

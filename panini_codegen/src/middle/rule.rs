@@ -111,8 +111,8 @@ impl Rule {
                 };
                 vec![basic_rule]
             }
-            &Rule::PrecedencedRule { ref rhs_levels, .. } => {
-                let mut basic_rules = vec![];
+            &Rule::PrecedencedRule { .. } => {
+                let basic_rules = vec![];
                 // for level in rhs_levels {
                 //     for rule in &level.rules {
                 //         let basic_rule = BasicRule {

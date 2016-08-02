@@ -4,9 +4,7 @@ use cfg::Symbol;
 
 use rs;
 
-use middle::{Rule, SymbolicName};
 use middle::attr::Attrs;
-use middle::hir;
 use middle::rule::BasicRule;
 use middle::lint::*;
 

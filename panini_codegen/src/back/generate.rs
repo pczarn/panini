@@ -875,15 +875,15 @@ impl GenParser {
         let closure = self.translate_closure(cx, traversal, store);
         // Terminals and their variants
         let &GenArgumentsFromOuterLayer {
-            terminal_names: ref terminal_names,
-            terminal_variants: ref terminal_variants,
-            terminal_bare_variants: ref terminal_bare_variant,
+            ref terminal_names,
+            ref terminal_variants,
+            ref terminal_bare_variants
         } = arguments_from_outer_layer;
         let terminal_names = terminal_names.iter();
         let terminal_variants = terminal_variants.iter().map(|interned_str| {
             (&**interned_str).to_ident()
         });
-        let terminal_bare_variant = terminal_bare_variant.iter();
+        let terminal_bare_variants = terminal_bare_variants.iter();
         // Wildcards
         let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
                               .take(self.infer.len());
@@ -922,7 +922,7 @@ impl GenParser {
                                 } else {
                                     unreachable!()
                                 };
-                                upper_builder.push($UpperValue::$terminal_bare_variant(inner));
+                                upper_builder.push($UpperValue::$terminal_bare_variants(inner));
                             }
                         }
                     )else*

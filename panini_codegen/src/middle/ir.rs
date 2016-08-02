@@ -133,8 +133,6 @@ struct IrFinalHir {
     // Final
     lower_level: InvocationOfInnerLayer,
     trace_tokens: Vec<Vec<String>>,
-    // what for? For getting lhs and rhs spans. Accessed by action ID.
-    hir_rules_with_names: Vec<Rule<SymbolicName>>,
 }
 
 struct IrPrepared {
@@ -189,7 +187,6 @@ struct CommonPrepared {
     trace_tokens: Vec<Vec<String>>,
     trace_sources: Vec<SourceOrigin>,
     name_map: NameMap,
-    hir_rules_with_names: Vec<Rule<SymbolicName>>,
     hir: Hir,
     errors: Vec<TransformationError>,
 }
@@ -274,7 +271,6 @@ impl IrInitialHir {
 
 impl IrFinalHir {
     fn compute(ir: IrInitialHir) -> Self {
-        let hir_rules_with_names = ir.hir_with_names.rules.clone();
         let mut grammar = Grammar::new();
         let (hir, sym_map, sym_vec) = {
             let mut fold = Folder::new(grammar.sym_source_mut());
@@ -294,7 +290,6 @@ impl IrFinalHir {
             errors: ir.errors,
             lower_level: ir.lower_level,
             trace_tokens: ir.trace_tokens,
-            hir_rules_with_names: hir_rules_with_names,
         }
     }
 }
@@ -380,7 +375,6 @@ impl IrPrepared {
                 trace_sources: trace_sources,
                 lower_level: lower_level,
                 name_map: ir.name_map,
-                hir_rules_with_names: ir.hir_rules_with_names,
                 hir: hir,
             }
         }
@@ -398,7 +392,7 @@ impl IrBinarized {
         let mut cycles_among_auto_types = vec![];
         cycle_matrix.transitive_closure();
         // make sure the actions still correspond to grammar rules.
-        // do not need hir_rules_with_names?
+        // do not need raw hir rules?
         for rule in &ir.common.basic_rules {
             // Declare lambdas
             let to_rhs_symbol = |pos: usize| rule.rhs[pos];
@@ -591,8 +585,7 @@ impl IrMapped {
             let lhs = maps.internalize(rule.lhs()).unwrap();
             let rhs: Vec<_>;
             rhs = rule.rhs().iter().map(|sym| maps.internalize(*sym).unwrap()).collect();
-            let mut history = rule.history().clone();
-            // history.nullable = history.nullable.map(|(sym, pos)| (maps.internalize(sym).unwrap(), pos));
+            let history = rule.history().clone();
             remapped_nulling_grammar.rule(lhs).rhs_with_history(&rhs, history);
         }
         Ok(IrMapped {

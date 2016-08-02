@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use cfg::*;
 
 use gearley::grammar::History;
