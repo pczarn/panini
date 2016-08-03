@@ -1077,13 +1077,14 @@ impl GenParser {
     }
 
     fn translate_identity(&self, cx: &mut rs::ExtCtxt) -> Vec<rs::TokenTree> {
-        let UniqueNames { layer_macro, .. } = self.unique_names;
+        let UniqueNames { lower_layer_macro, .. } = self.unique_names;
         let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
-        // What to do with this?
+        // The inner layer is missing. Put placeholding definitions in the inner layer.
+        // - How will the parse builder work with an identity layer?
+        // - I think it won't. The main parse builder will be Identity.
         quote_tokens! {cx,
             // ########### QUOTED CODE #########################
-            macro_rules! $layer_macro {
-                () => (unreachable!());
+            macro_rules! $lower_layer_macro {
                 (@builder @factory [$dol factory:expr] @closure [$dol closure:expr]) => (Identity);
                 (@get $dol parse:expr) => ($dol parse);
             }
