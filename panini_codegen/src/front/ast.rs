@@ -12,9 +12,22 @@ pub struct Stmts {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stmt {
     pub lhs: Name,
-    pub rhs: Vec<(Rhs, Action)>,
+    pub rhs: PrecedencedLevels,
     pub ty: Option<rs::P<rs::Ty>>,
     pub span: rs::Span,
+}
+
+pub type PrecedencedLevels = Vec<AlternativesWithActions>;
+pub type AlternativesWithActions = Vec<RhsWithAction>;
+pub type RhsWithAction = (Rhs, Action);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rhs(pub Vec<RhsElement>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RhsElement {
+    pub bind: Option<rs::P<rs::Pat>>,
+    pub elem: RhsAst,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,24 +40,11 @@ pub enum RhsAst {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Rhs(pub Vec<RhsElement>);
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RhsElement {
-    pub bind: Option<rs::P<rs::Pat>>,
-    pub elem: RhsAst,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Sequence {
     pub rhs: Rhs,
     pub min: u32,
     pub max: Option<u32>,
 }
-
-// pub struct Precedenced {
-    
-// }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Action {

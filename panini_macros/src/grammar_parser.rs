@@ -87,7 +87,7 @@ impl Parser {
                     v
                 };
 
-            stmt ::= lhs:name ty:ty defined_as rhs:top_rhs semi => {
+            stmt ::= lhs:name ty:ty defined_as rhs:precedenced semi => {
                 Stmt {
                     lhs: lhs,
                     rhs: rhs,
@@ -143,6 +143,16 @@ impl Parser {
                 }
                 | => {
                     None
+                };
+
+            precedenced ::=
+                alt:top_rhs => {
+                    vec![alt]
+                }
+                | rec:precedenced pipe r_angle alt:top_rhs => {
+                    let mut rec = rec;
+                    rec.push(alt);
+                    rec
                 };
 
             top_rhs ::=
@@ -254,6 +264,7 @@ impl Parser {
                 r_bracket = (&rs::Token::CloseDelim(rs::DelimToken::Bracket), _);
                 l_paren = (&rs::Token::OpenDelim(rs::DelimToken::Paren), _);
                 r_paren = (&rs::Token::CloseDelim(rs::DelimToken::Paren), _);
+                r_angle = (&rs::Token::Gt, _);
                 string = (&rs::Token::Literal(rs::token::Str_(_), _), _);
                 sub = (&rs::Token::Ident(ident), _) if (ident.name.as_str() == "sub");
 
