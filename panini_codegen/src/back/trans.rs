@@ -356,10 +356,10 @@ impl IrTranslator {
 
         let mut seen_origin = HashSet::new();
         // For generating actions.
-        let rules_with_external_origin = self.ir.grammar.rules().filter_map(|rule| {
+        let external_origins = self.ir.grammar.rules().filter_map(|rule| {
             if let Some(origin) = rule.history().origin() {
                 if seen_origin.insert(origin) {
-                    Some((rule, origin as u32))
+                    Some(origin)
                 } else {
                     None
                 }
@@ -369,8 +369,8 @@ impl IrTranslator {
             }
         });
 
-        for (rule, origin) in rules_with_external_origin {
-            // Translate to external.
+        for origin in external_origins {
+            // Get the basic rule.
             let basic_rule = &self.ir.basic_rules[origin as usize];
             // The basic rule's lhs is often equal to the processed rule's rhs.
             // They are not equal for precedenced rules, due to their rewrite.
@@ -381,7 +381,7 @@ impl IrTranslator {
             // Diverge on sequence rules
             if let Some((rust_expr, patterns)) = self.get_action(origin as usize) {
                 processed_rule.push(GenRule {
-                    id: origin,
+                    id: origin as u32,
                     variant: variant,
                     action: rust_expr,
                     args: patterns
@@ -389,7 +389,7 @@ impl IrTranslator {
             } else {
                 let elem_variant = self.variant_names[&basic_rule.rhs[0].node];
                 processed_sequences.push(GenSequence {
-                    id: origin,
+                    id: origin as u32,
                     variant: variant,
                     elem_variant: elem_variant,
                 });
