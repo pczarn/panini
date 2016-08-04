@@ -33,21 +33,23 @@ fn test_simple_parse() {
             stmts: vec![
                 Stmt {
                     lhs: start,
-                    rhs: vec![(
-                        Rhs(vec![
-                            RhsElement {
-                                bind: None,
-                                elem: RhsAst::Symbol(a),
+                    rhs: vec![
+                        vec![(
+                            Rhs(vec![
+                                RhsElement {
+                                    bind: None,
+                                    elem: RhsAst::Symbol(a),
+                                },
+                                RhsElement {
+                                    bind: None,
+                                    elem: RhsAst::Symbol(b),
+                                }
+                            ]),
+                            Action {
+                                expr: None,
                             },
-                            RhsElement {
-                                bind: None,
-                                elem: RhsAst::Symbol(b),
-                            }
-                        ]),
-                        Action {
-                            expr: None,
-                        },
-                    )],
+                        )]
+                    ],
                     ty: None,
                     span: rs::DUMMY_SP,
                 },

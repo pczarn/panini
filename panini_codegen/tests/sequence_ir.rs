@@ -35,47 +35,51 @@ fn test_sequence_ir() {
             // start ::= a b;
             Stmt {
                 lhs: start,
-                rhs: vec![(
-                    Rhs(vec![
-                        RhsElement {
-                            bind: None,
-                            elem: RhsAst::Symbol(a),
+                rhs: vec![
+                    vec![(
+                        Rhs(vec![
+                            RhsElement {
+                                bind: None,
+                                elem: RhsAst::Symbol(a),
+                            },
+                            RhsElement {
+                                bind: None,
+                                elem: RhsAst::Symbol(b),
+                            }
+                        ]),
+                        ast::Action {
+                            expr: None,
                         },
-                        RhsElement {
-                            bind: None,
-                            elem: RhsAst::Symbol(b),
-                        }
-                    ]),
-                    ast::Action {
-                        expr: None,
-                    },
-                )],
+                    )]
+                ],
                 ty: None,
                 span: rs::DUMMY_SP,
             },
             // a ::= b*;
             Stmt {
                 lhs: a,
-                rhs: vec![(
-                    Rhs(vec![
-                        RhsElement {
-                            bind: None,
-                            elem: RhsAst::Sequence(Sequence {
-                                rhs: Rhs(vec![
-                                    RhsElement {
-                                        bind: None,
-                                        elem: RhsAst::Symbol(b),
-                                    }
-                                ]),
-                                min: 0,
-                                max: None,
-                            }),
-                        }
-                    ]),
-                    ast::Action {
-                        expr: None,
-                    },
-                )],
+                rhs: vec![
+                    vec![(
+                        Rhs(vec![
+                            RhsElement {
+                                bind: None,
+                                elem: RhsAst::Sequence(Sequence {
+                                    rhs: Rhs(vec![
+                                        RhsElement {
+                                            bind: None,
+                                            elem: RhsAst::Symbol(b),
+                                        }
+                                    ]),
+                                    min: 0,
+                                    max: None,
+                                }),
+                            }
+                        ]),
+                        ast::Action {
+                            expr: None,
+                        },
+                    )]
+                ],
                 ty: None,
                 span: rs::DUMMY_SP,
             },

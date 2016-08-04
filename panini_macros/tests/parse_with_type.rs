@@ -37,19 +37,21 @@ fn test_simple_parse_with_type() {
             stmts: vec![
                 Stmt {
                     lhs: start,
-                    rhs: vec![(
-                        Rhs(vec![
-                            RhsElement {
-                                bind: None,
-                                elem: RhsAst::Symbol(a),
-                            },
-                            RhsElement {
-                                bind: None,
-                                elem: RhsAst::Symbol(b),
-                            }
-                        ]),
-                        Action { expr: None },
-                    )],
+                    rhs: vec![
+                        vec![(
+                            Rhs(vec![
+                                RhsElement {
+                                    bind: None,
+                                    elem: RhsAst::Symbol(a),
+                                },
+                                RhsElement {
+                                    bind: None,
+                                    elem: RhsAst::Symbol(b),
+                                }
+                            ]),
+                            Action { expr: None },
+                        )]
+                    ],
                     ty: Some(quote_ty!(ecx, Test)),
                     span: rs::DUMMY_SP,
                 },

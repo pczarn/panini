@@ -204,20 +204,23 @@ impl IrStmtsAndAttrs {
             // Set the implicit start.
             let start = rs::gensym("_lower_start_");
             for terminal in from_outer.terminals() {
-                stmts.stmts.push(ast::Stmt {
+                let lower_start_stmt = ast::Stmt {
                     lhs: rs::dummy_spanned(start),
-                    rhs: vec![(
-                        ast::Rhs(vec![
-                            ast::RhsElement {
-                                bind: None,
-                                elem: ast::RhsAst::Symbol(rs::dummy_spanned(*terminal))
-                            }
-                        ]),
-                        ast::Action { expr: None }
-                    )],
+                    rhs: vec![
+                        vec![(
+                            ast::Rhs(vec![
+                                ast::RhsElement {
+                                    bind: None,
+                                    elem: ast::RhsAst::Symbol(rs::dummy_spanned(*terminal))
+                                }
+                            ]),
+                            ast::Action { expr: None }
+                        )]
+                    ],
                     ty: None,
                     span: rs::DUMMY_SP,
-                });
+                };
+                stmts.stmts.push(lower_start_stmt);
             }
         }
 

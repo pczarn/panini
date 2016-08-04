@@ -59,8 +59,10 @@ impl Trace {
     }
 
     fn transform_stmt(&mut self, stmt: &Stmt) {
-        for &(ref rhs, _) in &stmt.rhs {
-            self.transform_rhs(stmt.lhs.node, rhs);
+        for level in &stmt.rhs {
+            for &(ref rhs, _) in level {
+                self.transform_rhs(stmt.lhs.node, rhs);
+            }
         }
     }
 

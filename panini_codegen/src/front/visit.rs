@@ -50,8 +50,10 @@ pub trait RhsAstVisitor {
     }
 
     fn walk_stmt(&mut self, stmt: &Stmt) {
-        for &(ref rhs, ref _action) in &stmt.rhs {
-            self.visit_rhs(rhs);
+        for level in &stmt.rhs {
+            for &(ref rhs, ref _action) in level {
+                self.visit_rhs(rhs);
+            }
         }
     }
 
