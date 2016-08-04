@@ -29,20 +29,22 @@ pub enum Rule<S = Symbol> {
     PrecedencedRule {
         lhs: rs::Spanned<S>,
         rhs_levels: Vec<PrecedenceLevel<S>>,
-        action: ActionExpr,
-        source_origin: SourceOrigin,
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrecedenceLevel<S> {
-    rules: Vec<PrecedencedRuleAlternative<S>>,
+    pub rules: Vec<PrecedencedRuleAlternative<S>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrecedencedRuleAlternative<S> {
-    rhs: Vec<rs::Spanned<S>>,
-    action: ActionExpr,
+    pub rhs: Vec<rs::Spanned<S>>,
+    pub tuple_binds: Vec<usize>,
+    pub deep_binds: Vec<usize>,
+    pub shallow_binds: Vec<(usize, rs::ast::Ident)>,
+    pub action: ActionExpr,
+    pub source_origin: SourceOrigin,
 }
 
 /// A basic rule has simplified information about a rule.
@@ -81,7 +83,8 @@ impl Rule {
 
     pub fn basic_rules(&self) -> Vec<BasicRule> {
         match self {
-            &Rule::BnfRule { lhs, ref rhs, action: ref action_expr, ref deep_binds, ref shallow_binds, ref tuple_binds, .. } => {
+            &Rule::BnfRule { lhs, ref rhs, action: ref action_expr,
+                             ref deep_binds, ref shallow_binds, ref tuple_binds, .. } => {
                 let action;
                 if action_expr.is_inline() ||
                         !deep_binds.is_empty() ||
@@ -111,34 +114,52 @@ impl Rule {
                 };
                 vec![basic_rule]
             }
-            &Rule::PrecedencedRule { .. } => {
-                let basic_rules = vec![];
-                // for level in rhs_levels {
-                //     for rule in &level.rules {
-                //         let basic_rule = BasicRule {
-                //             // where from?
-                //             lhs: rule.lhs,
-                //             rhs: vec![rule.rhs],
-                //             action: Action::Sequence,
-                //         };
-                //         basic_rules.push(basic_rule);
-                //     }
-                // }
+            &Rule::PrecedencedRule { lhs, ref rhs_levels, .. } => {
+                let mut basic_rules = vec![];
+                for level in rhs_levels {
+                    for rule in &level.rules {
+                        let action;
+                        if rule.action.is_inline() ||
+                                !rule.deep_binds.is_empty() ||
+                                !rule.shallow_binds.is_empty() {
+                            action = Action::Struct {
+                                deep_binds: rule.deep_binds.clone(),
+                                shallow_binds: rule.shallow_binds.clone(),
+                                expr: rule.action.clone(),
+                            };
+                        } else {
+                            action = Action::Tuple {
+                                tuple_binds: rule.tuple_binds.clone(),
+                            };
+                        }
+                        let basic_rule = BasicRule {
+                            // where from?
+                            lhs: lhs,
+                            rhs: rule.rhs.clone(),
+                            action: action,
+                        };
+                        basic_rules.push(basic_rule);
+                    }
+                }
                 basic_rules
             }
         }
     }
 
-    pub fn source_origin(&self) -> &SourceOrigin {
+    pub fn source_origins(&self) -> Vec<SourceOrigin> {
         match self {
             &Rule::BnfRule { ref source_origin, .. } => {
-                source_origin
+                vec![source_origin.clone()]
             }
             &Rule::SequenceRule { ref source_origin, .. } => {
-                source_origin
+                vec![source_origin.clone()]
             }
-            &Rule::PrecedencedRule { ref source_origin, .. } => {
-                source_origin
+            &Rule::PrecedencedRule { ref rhs_levels, .. } => {
+                rhs_levels.iter().flat_map(|level| {
+                    level.rules.iter().map(|rule| {
+                        rule.source_origin.clone()
+                    })
+                }).collect()
             }
         }
     }
@@ -190,8 +211,6 @@ pub trait FoldRule<S1>
             Rule::PrecedencedRule {
                 lhs,
                 rhs_levels,
-                action,
-                source_origin,
             } => {
                 Rule::PrecedencedRule {
                     lhs: self.fold_spanned_symbol(lhs),
@@ -199,15 +218,17 @@ pub trait FoldRule<S1>
                         let rules = precedence_level.rules.into_iter().map(|alt| {
                             PrecedencedRuleAlternative {
                                 rhs: self.fold_spanned_symbols(alt.rhs),
+                                tuple_binds: alt.tuple_binds,
+                                shallow_binds: alt.shallow_binds,
+                                deep_binds: alt.deep_binds,
                                 action: alt.action,
+                                source_origin: alt.source_origin,
                             }
                         }).collect();
                         PrecedenceLevel {
                             rules: rules
                         }
                     }).collect(),
-                    action: action,
-                    source_origin: source_origin,
                 }
             }
         }

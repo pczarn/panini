@@ -8,6 +8,7 @@ use rs;
 use front::{ast, Name};
 use front::visit::RhsAstVisitor;
 use middle::{ActionExpr, Ty, AutoTy, Rule};
+use middle::rule::{PrecedenceLevel, PrecedencedRuleAlternative};
 use middle::trace::SourceOrigin;
 use middle::embedded_string::EmbeddedString;
 
@@ -48,41 +49,78 @@ impl Hir<SymbolicName> {
             self.type_map.insert(stmt.lhs.node, Ty::RustTy(ty.clone()));
         }
 
-        for &(ref rhs, ref action) in &stmt.rhs {
-            let rule = self.transform_rhs(stmt.lhs, rhs, *rhs_counter);
-            *rhs_counter += 1;
+        let mut levels_bnf_rules = vec![];
+        let mut local_rhs_counter = *rhs_counter;
+        for level in &stmt.rhs {
+            let mut bnf_rules_for_level = vec![];
+            for &(ref rhs, ref action) in level {
+                let rule = self.transform_rhs(stmt.lhs, rhs, local_rhs_counter);
+                local_rhs_counter += 1;
 
-            let (action, ty) = if let Some(ref inline_action) = action.expr {
-                self.type_map.entry(rule.lhs.node).or_insert(Ty::Infer);
-                let action = ActionExpr::Inline {
-                    // bind: self.transform_
-                    expr: inline_action.clone(),
-                };
-                let ty = if let Some(ref ty) = stmt.ty {
-                    Ty::RustTy(ty.clone())
+                let (action, ty) = if let Some(ref inline_action) = action.expr {
+                    self.type_map.entry(rule.lhs.node).or_insert(Ty::Infer);
+                    let action = ActionExpr::Inline {
+                        // bind: self.transform_
+                        expr: inline_action.clone(),
+                    };
+                    let ty = if let Some(ref ty) = stmt.ty {
+                        Ty::RustTy(ty.clone())
+                    } else {
+                        Ty::Infer
+                    };
+                    (action, ty)
                 } else {
-                    Ty::Infer
+                    (ActionExpr::Auto, Ty::Auto(rule.auto_ty))
                 };
-                (action, ty)
-            } else {
-                (ActionExpr::Auto, Ty::Auto(rule.auto_ty))
-            };
 
-            if self.type_map.contains_key(&rule.lhs.node) {
-                self.type_equality.push((rule.lhs.node, ty));
-            } else {
-                self.type_map.insert(rule.lhs.node, ty);
+                if self.type_map.contains_key(&rule.lhs.node) {
+                    self.type_equality.push((rule.lhs.node, ty));
+                } else {
+                    self.type_map.insert(rule.lhs.node, ty);
+                }
+
+                bnf_rules_for_level.push(Rule::BnfRule {
+                    lhs: rule.lhs,
+                    rhs: rule.rhs,
+                    tuple_binds: rule.tuple_binds,
+                    deep_binds: rule.deep_binds,
+                    shallow_binds: rule.shallow_binds,
+                    source_origin: rule.source_origin,
+                    action: action,
+                });
             }
-
-            self.rules.push(Rule::BnfRule {
-                lhs: rule.lhs,
-                rhs: rule.rhs,
-                tuple_binds: rule.tuple_binds,
-                deep_binds: rule.deep_binds,
-                shallow_binds: rule.shallow_binds,
-                source_origin: rule.source_origin,
-                action: action,
-            });
+            levels_bnf_rules.push(bnf_rules_for_level);
+        }
+        if levels_bnf_rules.len() == 1 {
+            self.rules.extend(levels_bnf_rules.into_iter().next().unwrap().into_iter());
+            *rhs_counter = local_rhs_counter;
+        } else if levels_bnf_rules.len() > 1 {
+            // Declare a precedenced rule
+            let rule = Rule::PrecedencedRule {
+                lhs: stmt.lhs,
+                rhs_levels: levels_bnf_rules.into_iter().map(|level| {
+                    PrecedenceLevel {
+                        rules: level.into_iter().map(|bnf_rule| {
+                            match bnf_rule {
+                                Rule::BnfRule { rhs, tuple_binds, deep_binds, shallow_binds,
+                                                action, source_origin, .. } => {
+                                    PrecedencedRuleAlternative {
+                                        rhs: rhs,
+                                        tuple_binds: tuple_binds,
+                                        deep_binds: deep_binds,
+                                        shallow_binds: shallow_binds,
+                                        action: action,
+                                        source_origin: source_origin,
+                                    }
+                                }
+                                _ => unreachable!()
+                            }
+                        }).collect()
+                    }
+                }).collect(),
+            };
+            self.rules.push(rule);
+            *rhs_counter += 1;
         }
     }
 

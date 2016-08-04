@@ -371,10 +371,14 @@ impl IrTranslator {
 
         for (rule, origin) in rules_with_external_origin {
             // Translate to external.
-            let rule_lhs = self.ir.externalize(rule.lhs());
+            let basic_rule = &self.ir.basic_rules[origin as usize];
+            // The basic rule's lhs is often equal to the processed rule's rhs.
+            // They are not equal for precedenced rules, due to their rewrite.
+            // We should use the basic rule's lhs. (It is already external.)
+            let rule_lhs = basic_rule.lhs.node;
             let variant = self.variant_names[&rule_lhs];
 
-            // DETECT SEQUENCE RULES HERE!
+            // Diverge on sequence rules
             if let Some((rust_expr, patterns)) = self.get_action(origin as usize) {
                 processed_rule.push(GenRule {
                     id: origin,
@@ -383,13 +387,11 @@ impl IrTranslator {
                     args: patterns
                 });
             } else {
-                let basic_rule = &self.ir.basic_rules[origin as usize];
-                let variant2 = self.variant_names[&basic_rule.lhs.node];
-                assert_eq!(variant, variant2);
+                let elem_variant = self.variant_names[&basic_rule.rhs[0].node];
                 processed_sequences.push(GenSequence {
                     id: origin,
                     variant: variant,
-                    elem_variant: self.variant_names[&basic_rule.rhs[0].node],
+                    elem_variant: elem_variant,
                 });
             }
         }

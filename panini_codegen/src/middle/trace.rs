@@ -81,6 +81,9 @@ impl Trace {
     }
 }
 
+// The behavior can be modified to show levels of precedenced rules.
+// Currently, only single BNF rules appear in the trace.
+
 struct TraceRhs {
     rhs: Vec<TraceToken>,
 }

@@ -362,7 +362,7 @@ impl IrPrepared {
         for rule in &hir.rules {
             rule.add_to(&mut grammar);
             basic_rules.extend(rule.basic_rules().into_iter());
-            trace_sources.push(rule.source_origin().clone());
+            trace_sources.extend(rule.source_origins().into_iter());
         }
         // Must rewrite sequence rules. They need to be analyzed later.
         grammar.rewrite_sequences();
