@@ -24,6 +24,7 @@ pub mod rs;
 
 pub use front::lexer;
 
+use std::env;
 use std::error::Error;
 
 use front::ast::Stmts;
@@ -33,6 +34,9 @@ use back::GenResult;
 pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
                 sp: rs::Span,
                 stmts: Stmts) -> Box<rs::MacResult + 'cx> {
+    // Initialize logging.
+    let _ = env_logger::init();
+    // Codegen.
     match middle::ir::IrMapped::transform_from_stmts(stmts) {
         Ok(ir) => {
             ir.report_warnings(ecx);
@@ -43,21 +47,12 @@ pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
                 return rs::DummyResult::any(rs::DUMMY_SP);
             }
             let result = back::IrTranslator::new(ir.into()).generate().translate(ecx);
-            // Log the generated code.
-            let _ = env_logger::init();
+            maybe_print_expansion(ecx, &result);
             match result {
                 GenResult::Parser(expr) => {
-                    info!("{}", rs::pprust::expr_to_string(&*expr));
                     rs::MacEager::expr(expr)
                 }
                 GenResult::Lexer(stmts) => {
-                    info!(" ========== BEGIN LEXER OUT");
-                    let mut whole_str = String::new();
-                    for stmt in &stmts {
-                        whole_str.push_str(&rs::pprust::stmt_to_string(stmt)[..]);
-                    }
-                    info!("{}", whole_str);
-                    info!(" ========== END LEXER OUT");
                     rs::MacEager::stmts(rs::SmallVector::many(stmts))
                 }
             }
@@ -91,4 +86,35 @@ fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError
             panic!();
         }
     }
+}
+
+fn maybe_print_expansion(ecx: &mut rs::ExtCtxt, result: &GenResult) {
+    if let Some(var_string) = env::var("PANINI_EXPANSION").ok() {
+        if var_string.trim() != "0" {
+            print_expansion(ecx, result);
+        }
+    }
+}
+
+fn print_expansion(ecx: &mut rs::ExtCtxt, result: &GenResult) {
+    let invocation_mod_path = ecx.mod_path();
+    let mod_name = invocation_mod_path.last().unwrap();
+    // Generate invocation for the snapshot.
+    println!("generate_run_parse!{{cx,{},", mod_name);
+    match result {
+        &GenResult::Parser(ref expr) => {
+            // No need for braces around the expr. It already has braces.
+            println!("{}", rs::pprust::expr_to_string(&**expr));
+        }
+        &GenResult::Lexer(ref stmts) => {
+            println!("{{");
+            let mut whole_str = String::new();
+            for stmt in stmts {
+                whole_str.push_str(&rs::pprust::stmt_to_string(stmt)[..]);
+            }
+            println!("{}", whole_str);
+            println!("}}");
+        }
+    }
+    // The invocation is still open. The enum_stream's expansion will be printed next.
 }
