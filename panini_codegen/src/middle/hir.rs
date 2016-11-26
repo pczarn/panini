@@ -16,35 +16,155 @@ use middle::embedded_string::EmbeddedString;
 pub type SymbolicName = rs::Name;
 pub type SpannedSymbolicName = rs::Spanned<rs::Name>;
 
+enum RichSymbol {
+    Symbolic(Symbol),
+    Embedded(EmbeddedString)
+}
+
 // some questions.
 // Why is Hir parameterized?
 // what are SymbolicName and Symbol? what are they for?
 
-pub struct Hir<S = Symbol> {
+// pub struct Hir<S = Symbol> {
+//     pub rules: Vec<HirNode<S>>,
+//     pub type_map: HashMap<S, Ty<S>>,
+//     pub type_equality: Vec<(S, Ty<S>)>,
+//     pub assert_type_equality: RefCell<Vec<(S, Ty<S>)>>,
+// }
+
+type ResultItem = (usize, BindType);
+
+pub struct HirBuilder {
+    rule_graph: Vec<HirNode<S>>,
+    results: Vec<ResultItem>,
+    rhs_counter: 0,
+}
+
+pub struct Hir {
+    typed_rule_graph: Vec<RuleNode<S>>,
+    lhs_map: HashMap<S, Vec<usize>>,
     pub rules: Vec<Rule<S>>,
     pub type_map: HashMap<S, Ty<S>>,
     pub type_equality: Vec<(S, Ty<S>)>,
-    pub assert_type_equality: RefCell<Vec<(S, Ty<S>)>>,
     pub embedded_strings: Vec<EmbeddedString<S>>,
 }
 
-impl Hir<SymbolicName> {
+// pub struct RuleNode {
+//     span:
+// }
+
+type HirNode = rs::Spanned<HirItem>;
+
+pub enum HirItem {
+    Rhs {
+        pub rhs: Vec<(rs::Spanned<usize>, BindType)>,
+    },
+    Sequence {
+        pub rhs: rs::Spanned<usize>,
+        pub min: u32,
+        pub max: Option<u32>,
+    },
+    PrecedencedRule {
+        pub rhs_levels: Vec<rs::Spanned<usize>>,
+    },
+    InlineAction {
+        pub expr: usize,
+        pub action: Action,
+    },
+    Lhs {
+        pub lhs: S,
+        pub rhs: rs::Spanned<usize>,
+    },
+    Atom {
+        symbol: Symbol,
+    },
+    Embedded {
+        string: EmbeddedString,
+    },
+}
+
+// A rule at a given position
+//
+// * has either a tuple binding or a named binding
+// * may have a deep binding regardless of other bindings
+pub struct BindType {
+    shallow: ShallowBindType,
+    deep: bool,
+}
+
+pub enum ShallowBindType {
+    Positional,
+    Named(rs::ast::Ident),
+}
+
+top_nonterminals: HashMap<S, usize>
+
+// what happens for a sequence in a precedenced rule?
+
+
+// type RuleNode = (RuleNode, SourceOrigin, HashMap<usize, rs::Span>);
+
+
+
+// impl Hir<SymbolicName> {
+impl HirBuilder {
     pub fn transform_stmts(stmts: &ast::Stmts) -> Self {
-        let mut hir = Hir {
-            rules: vec![],
-            type_map: HashMap::new(),
-            type_equality: vec![],
-            assert_type_equality: RefCell::new(vec![]),
-            embedded_strings: vec![],
+        let mut hir_builder = HirBuilder {
+            rule_graph: vec![],
+            results: vec![],
+            rhs_counter: 0,
         };
-        let mut rhs_counter = 0;
+        //     rules: vec![],
+        //     type_map: HashMap::new(),
+        //     type_equality: vec![],
+        //     assert_type_equality: RefCell::new(vec![]),
+        //     embedded_strings: vec![],
+        // };
         for stmt in &stmts.stmts[..] {
-            hir.transform_stmt(stmt, &mut rhs_counter);
+            hir_builder.transform_stmt(stmt);
         }
-        hir
+        hir_builder.into_hir()
     }
 
     pub fn transform_stmt(&mut self, stmt: &ast::Stmt, rhs_counter: &mut u32) {
+        let mut levels_bnf_rules = vec![];
+        for level in &stmt.rhs {
+            let mut rules_for_level = vec![];
+            for &(ref rhs, ref action) in level {
+                let rule = self.transform_rhs(stmt.lhs, rhs, local_rhs_counter);
+                if let Some(ref inline_action) = action.expr {
+                    this.graph.push(InlineAction {
+                        expr: rule.0,
+                        action: inline_action.clone(),
+                    })
+                    rule.0 = this.graph.len() - 1;
+                }
+                rules_for_level.push(rule);
+            }
+            let idx = self.graph.push(Rhs {
+                rhs: rules_for_level,
+            });
+            levels_rules.push(idx);
+        }
+        let idx = if levels_rules.len() == 1 {
+            self.rhs_counter = local_rhs_counter;
+            self.graph.push(Lhs {
+                lhs: stmt.lhs,
+                rhs: levels_rules[0],
+            })
+        } else if levels_rules.len() > 1 {
+            self.rhs_counter += 1;
+            // Declare a precedenced rule
+            self.graph.push(PrecedencedRule {
+                rhs_levels: levels_rules
+            })
+        };
+        self.graph.push(Lhs {
+            lhs: stmt.lhs,
+            rhs: idx,
+        });
+
+
         if let Some(ref ty) = stmt.ty {
             self.type_map.insert(stmt.lhs.node, Ty::RustTy(ty.clone()));
         }
@@ -124,7 +244,12 @@ impl Hir<SymbolicName> {
         }
     }
 
-    fn transform_rhs(&mut self, lhs: Name, rhs: &ast::Rhs, rhs_counter: u32) -> FlatRule {
+    fn transform_rhs(&mut self, lhs: Name, rhs: &ast::Rhs, rhs_counter: u32) -> ResultItem {
+        self.visit_rhs(rhs);
+        let top_result = self.results.pop().expect("one remaining rule expected");
+        assert!(self.results.is_empty(), "only one remaining rule expected");
+        return top_result
+
         let mut visitor = FlattenRhsAst::new(lhs, rhs_counter);
         visitor.visit_rhs(rhs);
         // The top rule `lhs ::= rhs`.
@@ -248,9 +373,20 @@ impl Hir<SymbolicName> {
             }
         }
     }
+
+    fn into_hir(self) -> Hir {
+        Hir {
+            rules: self.graph.map(),
+            type_map
+        }
+    }
 }
 
 // Flattening the RHS AST
+
+struct FlattenRhsAst {
+    hir: &'a mut Hir<SymbolicName>,
+}
 
 struct FlattenRhsAst {
     rule_stack: Vec<FlatRule>,
@@ -311,6 +447,11 @@ impl FlattenRhsAst {
         }
     }
 
+    fn transform(&mut self, ) {
+        self.
+    }
+
+    // -
     fn append_symbol(&mut self, symbol: rs::Spanned<rs::Name>, is_deep: bool) {
         let current_rule = self.rule_stack.last_mut().unwrap();
         current_rule.rhs.push(symbol);
@@ -320,9 +461,26 @@ impl FlattenRhsAst {
             current_rule.deep_binds.push(sym_pos);
         }
     }
+
+    fn push_result(&mut self, node: RuleNode) {
+        let bind_deep = match node {
+            Alternative { .. } | Rhs { .. } => {
+                true
+            }
+            _ => {
+                false
+            }
+        };
+        let bind = BindType {
+            shallow: Positional,
+            deep: bind_deep,
+        }
+        this.results.push((this.graph.len(), bind));
+        this.hir.graph.push(node);
+    }
 }
 
-impl RhsAstVisitor for FlattenRhsAst {
+impl RhsAstVisitor for HirBuilder {
     // Reversed order of visitation.
     fn walk_rhs_element(&mut self, rhs_elem: &ast::RhsElement) {
         self.visit_rhs_ast(&rhs_elem.elem);
@@ -331,12 +489,34 @@ impl RhsAstVisitor for FlattenRhsAst {
         self.visit_bind(&rhs_elem.bind);
     }
 
+    // The following push one result
+
     fn visit_rhs_symbol(&mut self, symbol: Name) {
+        self.push_result(Atom {
+            symbol: symbol
+        });
         self.cur_rule_pos += 1;
-        self.append_symbol(symbol, false);
+        // self.append_symbol(symbol, false);
     }
 
     fn visit_sequence(&mut self, sequence: &ast::Sequence) {
+        let mut source_origin = SourceOrigin {
+            rule_id: self.rule_id,
+            rule_pos: vec![self.cur_rule_pos],
+        };
+        self.walk_sequence(sequence);
+        // the last result_node is either a product or an alternative etc.
+        source_origin.rule_pos.push(self.cur_rule_pos);
+        self.push_result(Sequence {
+            rhs: self.pop_result(),
+            min: sequence.min,
+            max: sequence.max,
+            source_origin: source_origin,
+        });
+        self.cur_rule_pos += 1;
+
+        //
+
         // TODO prevent duplication of identical sequences
         let rule_lhs = rs::dummy_spanned(rs::gensym("G"));
         let seq_lhs = rs::dummy_spanned(rs::gensym("G"));
@@ -372,6 +552,17 @@ impl RhsAstVisitor for FlattenRhsAst {
     }
 
     fn visit_sum(&mut self, sum: &[ast::Rhs]) {
+        for rule in sum {
+            self.visit_rhs(rule);
+            self.cur_rule_pos += 1;
+        }
+        if !sum.is_empty() {
+            self.cur_rule_pos -= 1;
+        }
+        self.push_result(Alternative {
+            rhs: this.pop_n_results(sum.len()),
+        })
+
         let new_lhs = rs::dummy_spanned(rs::gensym("GS"));
         for rule in sum {
             self.rule_stack.push(FlatRule::new(new_lhs, self.rule_id, self.cur_rule_pos));
@@ -389,6 +580,15 @@ impl RhsAstVisitor for FlattenRhsAst {
     }
 
     fn visit_product(&mut self, product: &ast::Rhs) {
+        self.cur_rule_pos += 1;
+        let prev_num_results = self.results.len();
+        self.walk_product(product);
+        self.cur_rule_pos += 1;
+        let num_results = self.results.len() - prev_num_results;
+        self.push_result(Rhs {
+            rhs: self.pop_n_results(num_results),
+        });
+
         let new_lhs = rs::dummy_spanned(rs::gensym("GP"));
         // The inner rule goes to `rule_stack`.
         self.rule_stack.push(FlatRule::new(new_lhs, self.rule_id, self.cur_rule_pos));
@@ -415,7 +615,25 @@ impl RhsAstVisitor for FlattenRhsAst {
         self.append_symbol(new_sym, false);
     }
 
+    // Bind
+
     fn visit_bind(&mut self, bind: &Option<rs::P<rs::Pat>>) {
+        let current_result = self.results.last_mut().unwrap();
+        if let &Some(ref pat) = bind {
+            match &pat.node {
+                &rs::PatKind::Wild => {
+                    current_result.1.shallow = Ignored;
+                }
+                &rs::PatKind::Ident(_mode, spanned_ident, None) => {
+                    let bind_name = spanned_ident.node;
+                    current_result.1.shallow = Named(bind_name);
+                }
+                _ => panic!("unsupported pattern"),
+            }
+        } else {
+            current_result.1.shallow = Positional;
+        }
+
         let current_rule = self.rule_stack.last_mut().unwrap();
         let num_syms = current_rule.rhs.len() - 1;
         let last_sym = *current_rule.rhs.last().unwrap();
