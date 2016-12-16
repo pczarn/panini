@@ -45,19 +45,33 @@ impl IrTranslator {
         let terminal2 = self.ir.rules.iter().map(|rule| rule.name.to_ident());
         let terminal3 = self.ir.rules.iter().map(|rule| rule.name.to_ident());
 
-        let negative_pattern = self.ir.rules.iter().map(|rule| rule.negative.iter());
-
         let builder = AstBuilder::new();
+
+        let negative_arm = self.ir.rules.iter().map(|rule| {
+            rule.negative.iter().cloned().map(|(pat, guard)| {
+                ////////
+                // Some(NEGATIVE_PAT) if GUARD => { return false }
+                ////////
+                builder.arm()
+                    .pat().enum_()
+                        .id("Some").build()
+                        .pat().build(pat).build()
+                    .with_guard(guard)
+                    .body()
+                        .return_expr().false_()
+            })
+        });
+
         let positive_match = self.ir.rules.iter().enumerate().map(|(id, rule)| {
             let mut positive = rule.positive.clone();
             if positive.is_empty() {
-                positive.push(builder.pat().wild());
+                positive.push((builder.pat().wild(), None));
             }
             let mut iter = positive.into_iter().rev();
-            let first_pat = iter.next().unwrap();
-            //////// Build code
+            let (first_pat, first_guard) = iter.next().unwrap();
+            //////// Build an expression
             // match item {
-            //     FIRST_PAT if GUARD => { return true }
+            //     Some(FIRST_PAT) if FIRST_GUARD => { return true }
             //     _ => ()
             // }
             ////////
@@ -67,21 +81,27 @@ impl IrTranslator {
                     .pat().enum_()
                         .id("Some").build()
                         .pat().build(first_pat).build()
-                    .with_guard(rule.guard.clone())
+                    .with_guard(first_guard)
                     .body()
                         .return_expr().true_()
                 .arm()
                     .pat().wild()
                     .body().unit()
                 .build();
-            for pat in iter {
+            ////////
+            // match item {
+            //     Some(PAT) if GUARD => { MATCH_STMT }
+            //     _ => ()
+            // }
+            ////////
+            for (pat, guard) in iter {
                 match_stmt = builder.expr().match_()
                     .id("item")
                     .arm()
                         .pat().enum_()
                             .id("Some").build()
                             .pat().build(pat).build()
-                        .build_arm_(None, match_stmt)
+                        .build_arm_(guard, match_stmt)
                     .arm()
                         .pat().wild()
                         .body().unit()
@@ -296,9 +316,7 @@ impl IrTranslator {
                             if id == $id2 {
                                 let item = Some(item);
                                 match item {
-                                    $(
-                                        Some($negative_pattern) => return false,
-                                    )*
+                                    $($negative_arm)*
                                     _ => {}
                                 }
                                 $positive_match

@@ -45,6 +45,15 @@ pub struct NameMap {
     pub sym_vec: Vec<Option<SymbolicName>>,
 }
 
+impl NameMap {
+    fn new() -> Self {
+        NameMap {
+            sym_map: HashMap::new(),
+            sym_vec: vec![],
+        }
+    }
+}
+
 pub struct InternalExternalNameMap {
     internal_external: Mapping,
     name_map: NameMap,
@@ -115,7 +124,7 @@ struct IrStmtsAndAttrs {
 }
 
 struct IrInitialHir {
-    hir_with_names: Hir<SymbolicName>,
+    hir_builder: HirBuilder,
     start: SymbolicName,
     attrs: Attrs<SymbolicName>,
     errors: Vec<TransformationError>,
@@ -235,7 +244,7 @@ impl IrStmtsAndAttrs {
 
 impl IrInitialHir {
     fn compute(ir: IrStmtsAndAttrs) -> Result<Self, TransformationError> {
-        let mut hir_with_names = Hir::transform_stmts(&ir.stmts);
+        let mut hir_builder = HirBuilder::transform_stmts(&ir.stmts);
         let mut errors = ir.errors;
 
         if !hir_with_names.check_type_equality() {
@@ -275,8 +284,11 @@ impl IrInitialHir {
 impl IrFinalHir {
     fn compute(ir: IrInitialHir) -> Self {
         let mut grammar = Grammar::new();
-        let (hir, sym_map, sym_vec) = {
-            let mut fold = Folder::new(grammar.sym_source_mut());
+        let mut source = SymbolSource::new();
+        let mut name_map = NameMap::new();
+        let hir = ir.hir_builder.build_hir(name_map.source(grammar.sym_source_mut()));
+
+            let mut fold = Folder::new();
             let hir = fold.fold_hir(ir.hir_with_names);
             (hir, fold.sym_map, fold.sym_vec)
         };
@@ -285,10 +297,7 @@ impl IrFinalHir {
         IrFinalHir {
             hir: hir,
             grammar: grammar,
-            name_map: NameMap {
-                sym_map: sym_map,
-                sym_vec: sym_vec,
-            },
+            name_map: name_map,
             attrs: attrs,
             errors: ir.errors,
             lower_level: ir.lower_level,
@@ -400,7 +409,7 @@ impl IrBinarized {
             // Declare lambdas
             let to_rhs_symbol = |pos: usize| rule.rhs[pos];
             let is_in_cycle = |sym: &rs::Spanned<Symbol>| cycle_matrix[(sym.node.usize(), sym.node.usize())];
-            // 
+            //
             if is_in_cycle(&rule.lhs) {
                 // why does this only run for bound symbols, not all symbols? optimization??
                 // add regression test for recursive type among sequences?
@@ -524,7 +533,7 @@ impl IrMapped {
     fn compute(mut ir: IrProperNormalized) -> Result<Self, TransformationError> {
         // remap symbols
         let IrProperNormalized { mut bin_grammar, .. } = ir;
-        // Order rules 
+        // Order rules
         let mut ordering = HashMap::new();
         for rule in bin_grammar.rules() {
             if rule.rhs().len() == 1 {

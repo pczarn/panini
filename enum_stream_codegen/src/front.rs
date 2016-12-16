@@ -14,8 +14,7 @@ pub struct Stmt {
 
 #[derive(Clone, Debug)]
 pub struct StmtRhs {
-    pub conjunction: Vec<RhsElem>,
-    pub guard: Option<rs::P<rs::Expr>>,
+    pub conjunction: Vec<(RhsElem, Guard)>,
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +22,8 @@ pub struct RhsElem {
     pub pattern: rs::P<rs::Pat>,
     pub positive: bool,
 }
+
+pub type Guard = Option<rs::P<rs::Expr>>;
 
 impl Stmts {
     pub fn new(attrs: Vec<rs::Attribute>, stmts: Vec<Stmt>) -> Self {

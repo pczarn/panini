@@ -1,3 +1,5 @@
+mod analysis;
+
 use std::collections::HashMap;
 use std::collections::hash_map;
 use std::slice;
@@ -19,10 +21,10 @@ pub enum Ty<S = Symbol> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AutoTy<S = Symbol> {
     Tuple {
-        fields: Vec<S>,
+        factors: Vec<S>,
     },
     Struct {
-        members: HashMap<rs::ast::Ident, S>,
+        factors: HashMap<rs::ast::Ident, S>,
     },
 }
 
