@@ -264,7 +264,7 @@ impl GenParser {
         let null_bind_name = self.epsilon_actions.rules.iter().map(|r| r.name);
         let null_actions = self.epsilon_actions.rules.iter().map(|r| r.blocks.iter());
         let continuation_label = self.epsilon_actions.continuation_label;
-        
+
         let terminal_name = self.terminal_names.iter();
         let terminal_id = self.terminal_ids.iter();
 
@@ -296,14 +296,14 @@ impl GenParser {
 
             $($item_definitions)*
 
-            $(
-                macro_rules! $null_bind_name {
-                    ($dol x:expr) => {{
+            macro_rules! nulling_rule {
+                $(
+                    ($sym; $dol x:expr) => {{
                         let mut $continuation_label = $dol2 x;
                         $($null_actions)*
                     }}
-                }
-            )*
+                )*
+            }
             // ########### END QUOTED CODE
         }
     }
@@ -594,7 +594,7 @@ impl GenParser {
                                             }
                                             _ => unreachable!()
                                         };
-                                        let token = tokens[internal_token.usize()];                                        
+                                        let token = tokens[internal_token.usize()];
                                         self.parse.scan_tok(token, token_node);
                                     }
                                     _ => unreachable!()
@@ -1026,27 +1026,61 @@ impl GenParser {
                                     $(
                                         $action_id => {
                                             // `true` is to avoid irrefutable patterns
-                                            let val = (true, $(args[$arg_num].clone(),)*);
-                                            if let (true,
-                                                    $($Value::$arg_variant($arg_pat),)*) = val {
+                                            let val = ($(args[$arg_num].clone(),)*);
+                                            let rule_val = if let (true, ($($Value::$arg_variant($arg_pat),)*)) = (true, val) {
                                                 $Value_::$rule_variant($rules_expr)
                                             } else {
                                                 unreachable!()
-                                            }
+                                            };
+                                            $Value_::$rule_variant(rule_val)
                                         }
                                     )*
                                     $(
                                         $seq_action_id => {
                                             let seq_vec = args.iter().map(|arg| {
                                                 let val = (true, (*arg).clone());
-                                                if let (true,
-                                                        $Value::$seq_element_variant(elem)) = val {
+                                                if let (true, $Value::$seq_element_variant(elem)) = val {
                                                     elem
                                                 } else {
                                                     unreachable!()
                                                 }
                                             }).collect::<Vec<_>>();
                                             $Value_::$seq_variant(seq_vec)
+                                        }
+                                    )*
+                                        let to_value = |args| {
+                                            let val = ($((args[$arg]).clone())*);
+                                            match val {
+                                                ($($Value::$arg_variant($arg_pat),)*) => {
+                                                    $rules_expr
+                                                }
+                                                _ => unreachable!()
+                                            }
+                                        };
+                                        let to_value = |arg| {
+                                            let val = (*arg).clone();
+                                            match val {
+                                                $Value::$seq_element_variant(elem) => {
+                                                    elem
+                                                }
+                                                _ => unreachable!()
+                                            }
+                                        };
+                                    $(
+                                        $action_id => {
+                                            let to_value = |args| {
+                                                let val = ($(($arg).clone())*);
+                                                match (true, val) {
+                                                    (true, ($($Value::$arg_variant($arg_pat),)*)) => {
+                                                        $rules_expr
+                                                    }
+                                                    _ => unreachable!()
+                                                }
+                                            };
+                                            $Value_::$seq_variant(
+                                                args.iter().map(to_value).collect::<Vec<_>>()
+                                            )
+                                            $Value_::$rule_variant(to_value(args))
                                         }
                                     )*
                                     _ => unreachable!("rule id {}", alt.action())
