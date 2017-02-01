@@ -1,9 +1,13 @@
 use std::mem;
 
 use panini_codegen::rs;
-use enum_stream_codegen::front::{Stmts, Stmt, StmtRhs, RhsElem};
+use enum_stream_codegen::front::{Stmts, Stmt, StmtRhs, RhsElem, Guard};
 
 use util::delimit;
+
+pub fn quote_pat(cx: &mut rs::ExtCtxt, tok: &[rs::TokenTree]) -> rs::P<rs::Pat> {
+    quote_pat!(cx, $tok)
+}
 
 pub struct Parser;
 
@@ -47,43 +51,43 @@ impl Parser {
                 }
             };
 
-            rhs ::=
-                c:conjunction => {
-                    StmtRhs {
-                        conjunction: c,
-                        guard: None,
-                    }
+            rhs ::= c:conjunction => {
+                StmtRhs {
+                    conjunction: c,
                 }
-                | c:conjunction ident:ident guard_cond:tt => {
-                    let ident: rs::SpannedIdent = ident;
-                    assert_eq!(&*ident.node.name.as_str(), "if");
-                    StmtRhs {
-                        conjunction: c,
-                        guard: Some(quote_expr!(cx, ($guard_cond))),
-                    }
-                };
+            };
 
             conjunction ::=
-                elems:elem_and* elem:elem => {
-                    let mut elems: Vec<RhsElem> = elems;
+                elems:elem_and* elem:(elem guard) => {
+                    let mut elems: Vec<(RhsElem, Guard)> = elems;
                     elems.push(elem);
                     elems
                 };
 
-            elem_and ::= elem _:and_and;
+            elem_and ::= elem guard _:and_and;
+
+            guard ::=
+                () => {
+                    None
+                }
+                | ident:ident guard_cond:tt => {
+                    let ident: rs::SpannedIdent = ident;
+                    assert_eq!(&*ident.node.name.as_str(), "if");
+                    Some(quote_expr!(cx, ($guard_cond)))
+                };
 
             elem ::=
                 tts:tts => {
                     let tts: Vec<rs::TokenTree> = tts;
                     RhsElem {
-                        pattern: quote_pat!(cx, $tts),
+                        pattern: quote_pat(cx, &tts[..]),
                         positive: true,
                     }
                 }
                 | not tts:tts => {
                     let tts: Vec<rs::TokenTree> = tts;
                     RhsElem {
-                        pattern: quote_pat!(cx, $tts),
+                        pattern: quote_pat(cx, &tts[..]),
                         positive: false,
                     }
                 };

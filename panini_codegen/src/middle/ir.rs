@@ -244,7 +244,7 @@ impl IrStmtsAndAttrs {
 
 impl IrInitialHir {
     fn compute(ir: IrStmtsAndAttrs) -> Result<Self, TransformationError> {
-        let mut hir_builder = HirBuilder::transform_stmts(&ir.stmts);
+        let hir = Hir::from_stmts(&ir.stmts);
         let mut errors = ir.errors;
 
         if !hir_with_names.check_type_equality() {
@@ -286,12 +286,7 @@ impl IrFinalHir {
         let mut grammar = Grammar::new();
         let mut source = SymbolSource::new();
         let mut name_map = NameMap::new();
-        let hir = ir.hir_builder.build_hir(name_map.source(grammar.sym_source_mut()));
-
-            let mut fold = Folder::new();
-            let hir = fold.fold_hir(ir.hir_with_names);
-            (hir, fold.sym_map, fold.sym_vec)
-        };
+        let hir = ir.hir_builder.build_hir(name_map.with_source(grammar.sym_source_mut()));
         let attrs = ir.attrs.map_symbols(|name| sym_map[&name]);
         grammar.set_start(sym_map[&ir.start]);
         IrFinalHir {
@@ -368,6 +363,7 @@ impl IrPrepared {
         let mut trace_sources = vec![];
         let mut basic_rules = vec![];
         // Code common to all rules.
+
         for rule in &hir.rules {
             rule.add_to(&mut grammar);
             basic_rules.extend(rule.basic_rules().into_iter());

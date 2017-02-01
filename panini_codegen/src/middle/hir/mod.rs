@@ -53,9 +53,11 @@ pub enum Item<S> {
     },
     Atom {
         symbol: S,
+        source_origin: SourceOrigin,
     },
     Embedded {
         string: EmbeddedString,
+        source_origin: SourceOrigin,
     },
 }
 
@@ -70,7 +72,25 @@ struct BoundItem {
 // * may have a deep binding regardless of other bindings
 pub struct BindType {
     shallow: ShallowBindType,
-    deep: bool,
+    // deep: bool,
+}
+
+impl BindType {
+    fn from_pattern(pattern: &Option<rs::P<rs::Pat>>) -> Self {
+        if let &Some(ref pat) = bind {
+            match &pat.node {
+                &rs::PatKind::Wild => {
+                    Ignored
+                }
+                &rs::PatKind::Ident(_mode, spanned_ident, None) => {
+                    Named(spanned_ident.node)
+                }
+                _ => panic!("unsupported pattern"),
+            }
+        } else {
+            Positional
+        }
+    }
 }
 
 pub enum ShallowBindType {
@@ -82,3 +102,11 @@ pub enum ShallowBindType {
 
 
 // type RuleNode = (RuleNode, SourceOrigin, HashMap<usize, rs::Span>);
+
+impl Hir {
+    pub fn from_stmts() -> Self {
+        let mut hir_builder = HirBuilder::new();
+        hir_builder.transform_stmts(&ir.stmts);
+        hir_builder.into_hir()
+    }
+}

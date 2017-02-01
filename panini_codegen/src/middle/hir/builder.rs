@@ -11,58 +11,73 @@ pub struct HirBuilder {
 }
 
 impl HirBuilder {
-    pub fn transform_stmts(stmts: &ast::Stmts) -> Self {
-        let mut hir_builder = HirBuilder {
+    pub fn new() -> Self {
+        HirBuilder {
             graph: vec![],
             results: vec![],
             rhs_counter: 0,
             cur_rule_pos: 0,
-        };
-        for stmt in &stmts.stmts[..] {
-            hir_builder.transform_stmt(stmt);
         }
-        hir_builder.into_hir()
+    }
+
+    pub fn transform_stmts(&mut self, stmts: &ast::Stmts) -> Self {
+        for stmt in &stmts.stmts[..] {
+            self.transform_stmt(stmt);
+        }
     }
 
     pub fn transform_stmt(&mut self, stmt: &ast::Stmt) {
-        let mut levels_rules = vec![];
-        for level in &stmt.rhs {
-            let mut rules_for_level = vec![];
-            for &(ref rhs, ref action) in level {
-                let rule = self.transform_rhs(rhs);
-                if let Some(ref inline_action) = action.expr {
-                    rule.0 = this.create(InlineAction {
-                        expr: rule.0,
-                        action: inline_action.clone(),
-                    });
-                }
-                rules_for_level.push(rule);
-            }
-            let idx = self.create(Sum {
-                summands: rules_for_level,
-            });
-            levels_rules.push(idx);
-        }
-        let idx;
-        match levels_rules.len() {
-            0 => {
-                unreachable!()
-            }
-            1 => {
-                idx = levels_rules[0];
-            }
-            _ => {
-                // Declare a precedenced rule
-                idx = self.create(PrecedencedSum {
-                    summands: levels_rules
-                });
-            }
-        }
+        let level_sums = self.transform_stmt_rhs(&stmt.rhs);
+        let handle = self.sums_to_item(sums);
         self.lhs_map.entry(stmt.lhs).or_insert(vec![]).push(idx);
         self.rhs_counter += 1;
     }
 
-    fn transform_rhs(&mut self, rhs: &ast::Rhs) -> ResultItem {
+    fn transform_stmt_rhs_to_sums(&mut self, rhs: &PrecedencedLevels) -> Vec<Handle> {
+        let mut level_sums = vec![];
+        for level in &stmt.rhs {
+            let mut rules_for_level = vec![];
+            for rhs_with_action in level {
+                let rule = self.transform_rhs_with_action(rhs_with_action);
+                rules_for_level.push(rule);
+            }
+            let idx = self.create_item(Sum {
+                summands: rules_for_level,
+            });
+            level_sums.push(idx);
+        }
+    }
+
+    fn sums_to_item(&mut self, level_sums: Vec<Handle>) -> Handle {
+        match level_sums.len() {
+            0 => {
+                unreachable!()
+            }
+            1 => {
+                levels_rules[0]
+            }
+            _ => {
+                // Declare a precedenced rule
+                self.create_item(PrecedencedSum {
+                    summands: levels_rules
+                })
+            }
+        }
+    }
+
+    fn transform_rhs_with_action(&mut self, rhs_with_action: &RhsWithAction) -> Handle {
+        let &(ref rhs, ref action) = rhs_with_action;
+        if let Some(ref inline_action) = action.expr {
+            this.create_item(InlineAction {
+                item: this.transform_rhs(rhs),
+                action: inline_action.clone(),
+            })
+        } else {
+            this.transform_rhs(rhs)
+        }
+    }
+
+    fn transform_rhs(&mut self, rhs: &ast::Rhs) -> Handle {
         self.visit_rhs(rhs);
         assert_eq!(self.results.len(), 1, "only one remaining rule expected");
         self.results.pop().expect("one remaining rule expected")
@@ -94,24 +109,11 @@ impl HirBuilder {
         }
     }
 
-    fn create_node_and_result(&mut self, node: HirItem) {
-        let bind_deep = match node {
-            Alternative { .. } | Rhs { .. } => {
-                true
-            }
-            _ => {
-                false
-            }
-        };
-        let bind = BindType {
-            shallow: Ignored,
-            deep: bind_deep,
-        }
-        this.results.push(this.create_node(node));
-        this.create_node(node);
+    fn create_item_and_result(&mut self, node: HirItem) {
+        this.results.push(this.create_item(node));
     }
 
-    fn create_node(&mut self, node: HirItem) -> HirHandle {
+    fn create_item(&mut self, node: HirItem) -> HirHandle {
         self.graph.push(node);
         self.graph.len() - 1
     }
@@ -123,33 +125,31 @@ impl RhsAstVisitor for HirBuilder {
     // Reversed order of visitation.
     fn walk_rhs_element(&mut self, rhs_elem: &ast::RhsElement) {
         self.visit_rhs_ast(&rhs_elem.elem);
-        // Binds must be visited later, because they access the rule that was
-        // constructed before.
+        // Binds must be visited later, because they access the item that was
+        // constructed as a result of a visit to the rhs ast.
         self.visit_bind(&rhs_elem.bind);
     }
 
     // The following push one result
 
     fn visit_rhs_symbol(&mut self, symbol: Name) {
-        self.push_result(Atom {
-            symbol: symbol
+        self.create_item_and_result(Atom {
+            symbol: symbol,
+            source_origin: SourceOrigin {
+                rule_id: self.rule_id,
+                rule_pos: vec![self.cur_rule_pos],
+            },
         });
         self.cur_rule_pos += 1;
     }
 
     fn visit_sequence(&mut self, sequence: &ast::Sequence) {
-        let mut source_origin = SourceOrigin {
-            rule_id: self.rule_id,
-            rule_pos: vec![self.cur_rule_pos],
-        };
         self.walk_sequence(sequence);
         // the last result_node is either a product or an alternative etc.
-        source_origin.rule_pos.push(self.cur_rule_pos);
-        self.push_result(Sequence {
+        self.create_item_and_result(Sequence {
             rhs: self.pop_result(),
             min: sequence.min,
             max: sequence.max,
-            source_origin: source_origin,
         });
         self.cur_rule_pos += 1;
     }
@@ -162,7 +162,7 @@ impl RhsAstVisitor for HirBuilder {
         if !sum.is_empty() {
             self.cur_rule_pos -= 1;
         }
-        self.push_result(Sum {
+        self.create_item_and_result(Sum {
             summands: this.pop_n_results(sum.len()),
         })
     }
@@ -173,36 +173,29 @@ impl RhsAstVisitor for HirBuilder {
         self.walk_product(product);
         self.cur_rule_pos += 1;
         let num_results = self.results.len() - prev_num_results;
-        self.push_result(Product {
+        self.create_item_and_result(Product {
             factors: self.pop_n_results(num_results),
         });
     }
 
     fn visit_rhs_string(&mut self, string: Name) {
-        self.push_result(Embedded {
+        self.create_item_and_result(Embedded {
             string: string,
-            // source_origin: ... vec![self.cur_rule_pos, self.cur_rule_pos + 1],
+            source_origin: SourceOrigin {
+                rule_id: self.rule_id,
+                rule_pos: vec![self.cur_rule_pos],
+            },
         });
         self.cur_rule_pos += 1;
     }
 
     // Bind
 
-    fn visit_bind(&mut self, bind: &Option<rs::P<rs::Pat>>) {
-        let current_result = self.results.last_mut().unwrap();
-        let shallow_bind_type = if let &Some(ref pat) = bind {
-            match &pat.node {
-                &rs::PatKind::Wild => {
-                    Ignored
-                }
-                &rs::PatKind::Ident(_mode, spanned_ident, None) => {
-                    Named(spanned_ident.node)
-                }
-                _ => panic!("unsupported pattern"),
-            }
-        } else {
-            Positional
-        };
-        current_result.1.shallow = shallow_bind_type;
+    fn visit_bind(&mut self, pattern: &Option<rs::P<rs::Pat>>) {
+        let last_result = self.results.pop;
+        self.create_item_and_result(Bound {
+            item: last_result,
+            bind: BindType::from_pattern(pattern),
+        })
     }
 }
