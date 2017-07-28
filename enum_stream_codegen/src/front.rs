@@ -15,7 +15,7 @@ pub struct Stmt {
 #[derive(Clone, Debug)]
 pub struct StmtRhs {
     pub conjunction: Vec<RhsElem>,
-    pub guard: Option<rs::P<rs::Expr>>,
+    pub guard: Option<rs::TokenTree>,
 }
 
 #[derive(Clone, Debug)]
