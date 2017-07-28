@@ -1,5 +1,5 @@
-#![feature(plugin, plugin_registrar, rustc_private)]
-#![plugin(quasi_macros)]
+#![recursion_limit = "256"]
+#![feature(plugin_registrar, rustc_private)]
 
 #[macro_use]
 extern crate log;
@@ -7,9 +7,10 @@ extern crate env_logger;
 
 extern crate rustc;
 extern crate syntax;
+extern crate syntax_pos;
 
-extern crate aster;
-extern crate quasi;
+#[macro_use]
+extern crate quote;
 
 extern crate bit_matrix;
 extern crate cfg;

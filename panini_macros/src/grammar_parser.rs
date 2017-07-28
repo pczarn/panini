@@ -1,7 +1,5 @@
 use std::mem;
 
-use aster::AstBuilder;
-
 use panini_codegen::rs;
 use panini_codegen::front::lexer::Lexer;
 use panini_codegen::front::{Stmts, Stmt, Rhs, RhsAst, RhsElement, Action, Sequence};
@@ -100,7 +98,7 @@ impl Parser {
 
             ty ::=
                 rarrow tt:tt => {
-                    Some(quote_ty!(cx, $tt))
+                    Some(tt)
                 }
                 | => {
                     None
@@ -108,7 +106,7 @@ impl Parser {
 
             action ::=
                 fat_arrow l_brace tts:tts r_brace => {
-                    Some(quote_expr!(cx, { $tts }))
+                    Some(tts)
                 }
                 | => {
                     None
@@ -136,10 +134,10 @@ impl Parser {
             pattern ::=
                 ident:ident colon => {
                     let ident: rs::SpannedIdent = ident;
-                    Some(AstBuilder::new().span(ident.span).pat().id(ident.node))
+                    Some(rs::respan(ident.span, ident.node))
                 }
                 | underscore colon => {
-                    Some(AstBuilder::new().pat().wild())
+                    Some(quote! { _ })
                 }
                 | => {
                     None

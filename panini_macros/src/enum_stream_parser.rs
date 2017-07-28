@@ -59,7 +59,7 @@ impl Parser {
                     assert_eq!(&*ident.node.name.as_str(), "if");
                     StmtRhs {
                         conjunction: c,
-                        guard: Some(quote_expr!(cx, ($guard_cond))),
+                        guard: Some(guard_cond),
                     }
                 };
 

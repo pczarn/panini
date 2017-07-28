@@ -12,10 +12,6 @@ use std::fmt::Write;
 use std::u32;
 use std::mem;
 
-use aster;
-use aster::AstBuilder;
-use aster::ident::ToIdent;
-
 use cfg::symbol::Symbol;
 use cfg::ContextFreeRef;
 use cfg::remap::Mapping;
@@ -126,7 +122,7 @@ impl IrTranslator {
             // Use external symbols, but translate later.
             let terminal = self.ir.externalize(terminal);
             self.terminals.push(terminal);
-            let ty = self.builder.ty().path().id("I").id("T").build();
+            let ty = quote! { I::T };
             self.ir.type_map.insert(terminal, Ty::RustTy(ty));
             self.type_map.insert(terminal, GenType::Terminal);
             self.type_with_inference.insert(terminal);
@@ -230,47 +226,41 @@ impl IrTranslator {
                     self.type_with_inference.contains(sym)
                 );
                 let (ty, generics) = if has_inference {
-                    (GenType::Item(capitalized_name),
-                    self.builder.generics()
-                            .ty_param("I").build()
-                            .predicate().bound().id("I")
-                                .trait_(self.unique_names.Infer).build()
-                            .build()
-                        .build())
+                    let infer = self.unique_names.Infer;
+                    (
+                        GenType::Item(capitalized_name),
+                        quote! { I: #infer }
+                    )
                 } else {
-                    (GenType::Identifier(capitalized_name),
-                    self.builder.generics().build())
+                    (
+                        GenType::Identifier(capitalized_name),
+                        quote! {}
+                    )
                 };
-                let clone_item_impl = self.builder.item().impl_()
-                    .trait_().id("Clone").build()
-                    .with_generics(generics.clone())
-                    .method("clone")
-                        .fn_decl()
-                            .self_().ref_()
-                            .build_return(ty.generate(self.builder))
-                    .block().expr().struct_id(capitalized_name).with_id_exprs(
-                        members.iter().map(|(&name, _sym)| {
-                            (name,
-                             self.builder.expr()
-                                .method_call("clone")
-                                .field(name)
-                                .self_()
-                             .build())
-                        })
-                    ).build()
-                    .build_ty(ty.generate(self.builder));
-                let item_def = self.builder.item().struct_(capitalized_name)
-                    .with_generics(generics)
-                    .with_fields(
-                        members.iter().map(|(&name, &sym)| {
-                            self.builder
-                                .struct_field(name)
-                                .build_ty(self.type_map[&sym].generate(self.builder))
-                        })
-                    ).build();
+                let type = ty.generate();
+                let member_defs = members.iter().map(|(&name, &sym)| {
+                    let type = self.type_map[&sym].generate();
+                    quote! { #name: #type }
+                });
+                let member_clones = members.iter().map(|(&name, _)| {
+                    quote! { #name: #name.clone() }
+                });
+                let item_defs = quote! {
+                    struct #capitalized_name<#generics> {
+                        #(#member_defs)*
+                    }
+
+                    impl<#generics> Clone for #capitalized_name {
+                        fn clone(&self) -> #type {
+                            #capitalized_name {
+                                #(#member_clones)*
+                            }
+                        }
+                    }
+                };
                 ComputedType {
                     ty: ty,
-                    item_def: vec![item_def, clone_item_impl],
+                    item_defs: item_defs,
                     has_inference: has_inference,
                 }
             }
@@ -581,15 +571,14 @@ impl IrTranslator {
                 }).collect();
                 match idents.len() {
                     0 => {
-                        self.builder.expr().unit()
+                        quote! { () }
                     }
                     1 => {
+
                         self.builder.expr().id(idents[0])
                     }
                     _ => {
-                        self.builder.expr().tuple().with_exprs(
-                            idents.iter().map(|&ident| self.builder.expr().id(ident))
-                        ).build()
+                        quote! { ( #(#idents),* ) }
                     }
                 }
             }

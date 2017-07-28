@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 
 use rs;
-use rs::AttrMetaMethods;
+// use rs::AttrMetaMethods;
 
 use middle::error::TransformationError;
 use middle::lint::{Lint, Level};
