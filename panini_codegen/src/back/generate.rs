@@ -2,14 +2,12 @@
 
 use std::iter;
 
-use aster::AstBuilder;
-use aster::ident::ToIdent;
-
 use cfg::symbol::Symbol;
 use cfg_regex::ClassRange;
 use gearley::grammar::InternalGrammarParts;
 
 use rs;
+use quote::ByteStr;
 
 // Info for generation.
 
@@ -57,9 +55,6 @@ pub struct GenParser {
 
     // This layer's item names
     pub unique_names: UniqueNames,
-
-    // aster's builder
-    pub builder: AstBuilder,
 }
 
 pub struct GenArgumentsFromOuterLayer {
@@ -129,7 +124,7 @@ pub struct GenSequence {
 
 #[derive(Clone)]
 pub enum GenType {
-    RustTy(rs::P<rs::Ty>),
+    RustTy(rs::Tokens),
     Vec(Box<GenType>),
     Unit,
     Tuple(Vec<GenType>),
@@ -180,34 +175,34 @@ impl UniqueNames {
         let lower_id = current_id + 1;
 
         UniqueNames {
-            ValueInfer: rs::str_to_ident(&*format!("ValueInfer{}", current_id)),
-            Value: rs::str_to_ident(&*format!("Value{}", current_id)),
-            Infer: rs::str_to_ident(&*format!("Infer{}", current_id)),
-            Layer: rs::str_to_ident(&*format!("Layer{}", current_id)),
-            ParseFactory: rs::str_to_ident(&*format!("ParseFactory{}", current_id)),
-            Parse: rs::str_to_ident(&*format!("Parse{}", current_id)),
-            TracedParse: rs::str_to_ident(&*format!("TracedParse{}", current_id)),
-            LayerParam: rs::str_to_ident(&*format!("LayerParam{}", current_id)),
-            Params: rs::str_to_ident(&*format!("Params{}", current_id)),
-            TerminalAccessor: rs::str_to_ident(&*format!("TerminalAccessor{}", current_id)),
-            EvalArg: rs::str_to_ident(&*format!("EvalArg{}", current_id)),
-            SERIALIZED_GRAMMAR: rs::str_to_ident(&*format!("SERIALIZED_GRAMMAR{}", current_id)),
-            UpperValue: rs::str_to_ident(&*format!("Value{}", upper_id)),
-            UpperParse: rs::str_to_ident(&*format!("Parse{}", upper_id)),
-            UpperParseFactory: rs::str_to_ident(&*format!("ParseFactory{}", upper_id)),
-            UpperLayerParam: rs::str_to_ident(&*format!("LayerParam{}", upper_id)),
-            UpperEvalArg: rs::str_to_ident(&*format!("EvalArg{}", upper_id)),
-            LowerEvalArg: rs::str_to_ident(&*format!("EvalArg{}", lower_id)),
-            layer_macro: rs::str_to_ident(&*format!("layer_macro{}", current_id)),
-            lower_layer_macro: rs::str_to_ident(&*format!("layer_macro{}", lower_id)),
-            UpperTerminalAccessor: rs::str_to_ident(&*format!("TerminalAccessor{}", upper_id)),
-            UpperInfer: rs::str_to_ident(&*format!("Infer{}", upper_id)),
-            LowerInfer: rs::str_to_ident(&*format!("Infer{}", lower_id)),
-            InferTree: rs::str_to_ident(&*format!("InferTree{}", current_id)),
-            InferTreeVal: rs::str_to_ident(&*format!("InferTreeVal{}", current_id)),
-            UpperInferTree: rs::str_to_ident(&*format!("InferTree{}", upper_id)),
-            InferConstraint: rs::str_to_ident(&*format!("InferConstraint{}", current_id)),
-            LowerInferConstraint: rs::str_to_ident(&*format!("InferConstraint{}", lower_id)),
+            ValueInfer: rs::Symbol::gensym(&*format!("ValueInfer{}", current_id)),
+            Value: rs::Symbol::gensym(&*format!("Value{}", current_id)),
+            Infer: rs::Symbol::gensym(&*format!("Infer{}", current_id)),
+            Layer: rs::Symbol::gensym(&*format!("Layer{}", current_id)),
+            ParseFactory: rs::Symbol::gensym(&*format!("ParseFactory{}", current_id)),
+            Parse: rs::Symbol::gensym(&*format!("Parse{}", current_id)),
+            TracedParse: rs::Symbol::gensym(&*format!("TracedParse{}", current_id)),
+            LayerParam: rs::Symbol::gensym(&*format!("LayerParam{}", current_id)),
+            Params: rs::Symbol::gensym(&*format!("Params{}", current_id)),
+            TerminalAccessor: rs::Symbol::gensym(&*format!("TerminalAccessor{}", current_id)),
+            EvalArg: rs::Symbol::gensym(&*format!("EvalArg{}", current_id)),
+            SERIALIZED_GRAMMAR: rs::Symbol::gensym(&*format!("SERIALIZED_GRAMMAR{}", current_id)),
+            UpperValue: rs::Symbol::gensym(&*format!("Value{}", upper_id)),
+            UpperParse: rs::Symbol::gensym(&*format!("Parse{}", upper_id)),
+            UpperParseFactory: rs::Symbol::gensym(&*format!("ParseFactory{}", upper_id)),
+            UpperLayerParam: rs::Symbol::gensym(&*format!("LayerParam{}", upper_id)),
+            UpperEvalArg: rs::Symbol::gensym(&*format!("EvalArg{}", upper_id)),
+            LowerEvalArg: rs::Symbol::gensym(&*format!("EvalArg{}", lower_id)),
+            layer_macro: rs::Symbol::gensym(&*format!("layer_macro{}", current_id)),
+            lower_layer_macro: rs::Symbol::gensym(&*format!("layer_macro{}", lower_id)),
+            UpperTerminalAccessor: rs::Symbol::gensym(&*format!("TerminalAccessor{}", upper_id)),
+            UpperInfer: rs::Symbol::gensym(&*format!("Infer{}", upper_id)),
+            LowerInfer: rs::Symbol::gensym(&*format!("Infer{}", lower_id)),
+            InferTree: rs::Symbol::gensym(&*format!("InferTree{}", current_id)),
+            InferTreeVal: rs::Symbol::gensym(&*format!("InferTreeVal{}", current_id)),
+            UpperInferTree: rs::Symbol::gensym(&*format!("InferTree{}", upper_id)),
+            InferConstraint: rs::Symbol::gensym(&*format!("InferConstraint{}", current_id)),
+            LowerInferConstraint: rs::Symbol::gensym(&*format!("InferConstraint{}", lower_id)),
         }
     }
 }
@@ -226,12 +221,12 @@ impl GenParser {
             let lexer_builder_def = self.translate_lexer_builder_def(cx);
             let layer_macro_def = self.translate_layer_macro_def(cx, arguments_from_outer_layer);
 
-            let block = quote_block!(cx, {
+            let block = quote!(cx, {
                 // ########### QUOTED CODE
-                $common_defs
-                $lexer_builder_def
-                $lexer_def
-                $layer_macro_def
+                #common_defs
+                #lexer_builder_def
+                #lexer_def
+                #layer_macro_def
                 // ########### END QUOTED CODE
             });
             let stmts = block.unwrap().unwrap().stmts;
@@ -241,15 +236,15 @@ impl GenParser {
             let parse_def = self.translate_parse_def(cx);
             let parse_builder = self.translate_parse_builder(cx);
 
-            let expr = quote_expr!(cx, {
+            let expr = quote!(cx, {
                 // ########### QUOTED CODE
                 use ::panini::*;
 
-                $common_defs
-                $parse_builder_def
-                $parse_def
-                $lexer_def
-                $parse_builder
+                #common_defs
+                #parse_builder_def
+                #parse_def
+                #lexer_def
+                #parse_builder
                 // ########### END QUOTED CODE
             });
             GenResult::Parser(expr)
@@ -273,34 +268,34 @@ impl GenParser {
 
         let UniqueNames { Value, Infer, TerminalAccessor, .. } = self.unique_names;
 
-        quote_tokens! {cx,
+        quote! {
             // ########### QUOTED CODE #########################
             #[derive(Clone)]
             #[allow(non_camel_case_types)]
-            enum $Value<I> where I: $Infer {
-                $($variant_name($variant_type),)*
+            enum #Value<I> where I: #Infer {
+                #(#variant_name(#variant_type),)*
             }
 
-            struct $TerminalAccessor;
+            struct #TerminalAccessor;
 
             #[allow(non_snake_case)]
-            impl $TerminalAccessor {
-                $(
+            impl #TerminalAccessor {
+                #(
                     #[inline]
-                    fn $terminal_name(&self) -> Symbol {
+                    fn #terminal_name(&self) -> Symbol {
                         // Use internal symbols.
-                        Symbol::from($terminal_id as u32)
+                        Symbol::from(#terminal_id as u32)
                     }
                 )*
             }
 
-            $($item_definitions)*
+            #(#item_definitions)*
 
-            $(
-                macro_rules! $null_bind_name {
-                    ($dol x:expr) => {{
-                        let mut $continuation_label = $dol2 x;
-                        $($null_actions)*
+            #(
+                macro_rules! #null_bind_name {
+                    (#dol x:expr) => {{
+                        let mut #continuation_label = #dol2 x;
+                        #(#null_actions)*
                     }}
                 }
             )*
@@ -321,15 +316,15 @@ impl GenParser {
             trivial_derivation,
         } = self.grammar_parts;
         // Convert serialized data to a byte string literal.
-        let storage_str = AstBuilder::new().expr().lit().byte_str(&storage[..]);
+        let storage_str = ByteStr(&storage[..]);
         let trace_ids = self.trace_rule_ids.iter();
         let trace_map = self.trace_rule_pos.iter().map(|v| v.iter());
         let trace_tokens = self.trace_tokens.iter().map(|rule_tokens| {
-            rule_tokens.iter().map(|tok| AstBuilder::new().expr().lit().str(&tok[..]))
+            rule_tokens.iter().map(|tok| &tok[..])
         });
 
         let sym_names = self.sym_names.iter().map(|name| {
-            AstBuilder::new().expr().lit().str(&name[..])
+            &name[..]
         });
         // Convert a symbol to integer.
         let start_sym = start_sym.usize();
@@ -344,55 +339,55 @@ impl GenParser {
             ParseFactory, Parse, TerminalAccessor, ..
         } = self.unique_names;
 
-        quote_tokens! {cx,
-            static SERIALIZED_GRAMMAR: &'static [u8] = $storage_str;
+        quote! {
+            static SERIALIZED_GRAMMAR: &'static [u8] = #storage_str;
             static TRACE_INFO: TraceInfo = TraceInfo {
                 ids: &[
-                    $($trace_ids),*
+                    #(#trace_ids),*
                 ],
                 map: &[
-                    $(&[$($trace_map),*]),*
+                    #(&[#(#trace_map),*]),*
                 ],
                 tokens: &[
-                    $(&[$($trace_tokens),*]),*
+                    #(&[#(#trace_tokens),*]),*
                 ],
             };
             static SYM_NAMES: &'static [&'static str] = &[
-                $($sym_names),*
+                #(#sym_names),*
             ];
 
-            struct $ParseFactory {
+            struct #ParseFactory {
                 grammar: grammar::InternalGrammar,
             }
 
-            impl $ParseFactory {
-                fn new() -> $ParseFactory {
+            impl #ParseFactory {
+                fn new() -> #ParseFactory {
                     let grammar = grammar::InternalGrammar::from_parts(
                         grammar::InternalGrammarParts {
                             storage: ::std::borrow::Cow::Borrowed(SERIALIZED_GRAMMAR),
-                            num_syms: $num_syms,
-                            num_rules: $num_rules,
-                            num_external_syms: $num_external_syms,
-                            num_internal_syms: $num_internal_syms,
-                            num_nulling_intermediate: $num_nulling_intermediate,
-                            start_sym: Symbol::from($start_sym),
-                            trivial_derivation: $trivial_derivation,
+                            num_syms: #num_syms,
+                            num_rules: #num_rules,
+                            num_external_syms: #num_external_syms,
+                            num_internal_syms: #num_internal_syms,
+                            num_nulling_intermediate: #num_nulling_intermediate,
+                            start_sym: Symbol::from(#start_sym),
+                            trivial_derivation: #trivial_derivation,
                         }
                     );
-                    $ParseFactory {
+                    #ParseFactory {
                         grammar: grammar,
                     }
                 }
 
-                fn terminal_accessor(&self) -> $TerminalAccessor {
-                    $TerminalAccessor
+                fn terminal_accessor(&self) -> #TerminalAccessor {
+                    #TerminalAccessor
                 }
 
-                fn new_parse<'g, I>(&'g mut self) -> $Parse<'g, I>
-                    where I: $InferTree<'g> + 'g,
+                fn new_parse<'g, I>(&'g mut self) -> #Parse<'g, I>
+                    where I: #InferTree<'g> + 'g,
                 {
                     let bocage = Box::new(Bocage::new(&self.grammar));
-                    let bocage_ref: &'g Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>;
+                    let bocage_ref: &'g Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>;
                     unsafe {
                         bocage_ref = &*(&*bocage as *const _);
                     }
@@ -400,7 +395,7 @@ impl GenParser {
                     let recognizer = Recognizer::new(&self.grammar, bocage_ref);
                     let traversal = Traversal::new(bocage_ref, NullOrder::new());
 
-                    $Parse {
+                    #Parse {
                         store: Arena::new(),
                         recognizer: recognizer,
                         bocage: bocage,
@@ -411,32 +406,32 @@ impl GenParser {
                 }
             }
 
-            trait $Infer {
+            trait #Infer {
                 type T: Copy;
-                $(type $infer_name;)*
+                #(type #infer_name;)*
             }
 
             #[derive(Clone, Copy)]
-            struct $ValueInfer<T, $($i2),*>(
-                ::std::marker::PhantomData<(T, $($i3),*)>
+            struct #ValueInfer<T, #(#i2),*>(
+                ::std::marker::PhantomData<(T, #(#i3),*)>
             );
 
-            impl<T, $($i4),*> $Infer for $ValueInfer<T, $($i5),*>
+            impl<T, #(#i4),*> #Infer for #ValueInfer<T, #(#i5),*>
                 where T: Copy
             {
                 type T = T;
-                $(type $i6 = $i7;)*
+                #(type #i6 = #i7;)*
             }
 
-            trait $InferTree<'g> {
+            trait #InferTree<'g> {
                 type Node: Copy;
-                type Infer: $Infer;
+                type Infer: #Infer;
             }
 
-            struct $InferTreeVal<Node, I>(::std::marker::PhantomData<(Node, I)>);
+            struct #InferTreeVal<Node, I>(::std::marker::PhantomData<(Node, I)>);
 
-            impl<'g, Node, I> $InferTree<'g> for $InferTreeVal<Node, I>
-                where I: $Infer + $LowerInferConstraint<'g, Node> + 'g, Node: Copy + 'g
+            impl<'g, Node, I> #InferTree<'g> for #InferTreeVal<Node, I>
+                where I: #Infer + #LowerInferConstraint<'g, Node> + 'g, Node: Copy + 'g
             {
                 type Node = Node;
                 type Infer = I;
@@ -457,7 +452,7 @@ impl GenParser {
             trivial_derivation,
         } = self.grammar_parts;
         // Convert serialized data to a byte string literal.
-        let storage_str = AstBuilder::new().expr().lit().byte_str(&storage[..]);
+        let storage_str = ByteStr(&storage[..]);
         // Convert a symbol to integer.
         let start_sym = start_sym.usize();
         // Use internal symbols for terminals.
@@ -474,51 +469,51 @@ impl GenParser {
             SERIALIZED_GRAMMAR, UpperParse, UpperParseFactory, Layer, ParseFactory, Parse, ..
         } = self.unique_names;
 
-        quote_tokens! {cx,
-            static $SERIALIZED_GRAMMAR: &'static [u8] = $storage_str;
+        quote! {
+            static #SERIALIZED_GRAMMAR: &'static [u8] = #storage_str;
 
-            struct $Layer;
+            struct #Layer;
 
-            struct $ParseFactory {
+            struct #ParseFactory {
                 grammar: grammar::InternalGrammar,
-                builder: $UpperParseFactory,
+                builder: #UpperParseFactory,
             }
 
-            impl $Layer {
+            impl #Layer {
                 fn new() -> Self {
-                    $Layer
+                    #Layer
                 }
 
-                fn with_parse_builder(self, builder: $UpperParseFactory) -> $ParseFactory {
+                fn with_parse_builder(self, builder: #UpperParseFactory) -> #ParseFactory {
                     let grammar = grammar::InternalGrammar::from_parts(
                         grammar::InternalGrammarParts {
-                            storage: ::std::borrow::Cow::Borrowed($SERIALIZED_GRAMMAR),
-                            num_syms: $num_syms,
-                            num_rules: $num_rules,
-                            num_external_syms: $num_external_syms,
-                            num_internal_syms: $num_internal_syms,
-                            num_nulling_intermediate: $num_nulling_intermediate,
-                            start_sym: Symbol::from($start_sym),
-                            trivial_derivation: $trivial_derivation,
+                            storage: ::std::borrow::Cow::Borrowed(#SERIALIZED_GRAMMAR),
+                            num_syms: #num_syms,
+                            num_rules: #num_rules,
+                            num_external_syms: #num_external_syms,
+                            num_internal_syms: #num_internal_syms,
+                            num_nulling_intermediate: #num_nulling_intermediate,
+                            start_sym: Symbol::from(#start_sym),
+                            trivial_derivation: #trivial_derivation,
                         }
                     );
-                    $ParseFactory {
+                    #ParseFactory {
                         grammar: grammar,
                         builder: builder,
                     }
                 }
             }
 
-            impl $ParseFactory {
-                fn terminal_accessor(&self) -> $TerminalAccessor {
-                    $TerminalAccessor
+            impl #ParseFactory {
+                fn terminal_accessor(&self) -> #TerminalAccessor {
+                    #TerminalAccessor
                 }
 
-                fn new_parse<'g, I>(&'g mut self) -> $Parse<'g, I>
-                    where I: $InferTree<'g> + 'g
+                fn new_parse<'g, I>(&'g mut self) -> #Parse<'g, I>
+                    where I: #InferTree<'g> + 'g
                 {
                     let bocage = Box::new(Bocage::new(&self.grammar));
-                    let bocage_ref: &'g Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>;
+                    let bocage_ref: &'g Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>;
                     unsafe {
                         bocage_ref = &*(&*bocage as *const _);
                     }
@@ -527,7 +522,7 @@ impl GenParser {
                     let traversal = Traversal::new(bocage_ref, NullOrder::new());
                     let parse = self.builder.new_parse();
 
-                    $Parse {
+                    #Parse {
                         parse: Box::new(parse),
                         grammar: &self.grammar,
                         exhausted: false,
@@ -543,15 +538,15 @@ impl GenParser {
                 }
             }
 
-            struct $Parse<'g, I> where I: $InferTree<'g> + 'g {
-                parse: Box<$UpperParse<'g, I::Up>>,
+            struct #Parse<'g, I> where I: #InferTree<'g> + 'g {
+                parse: Box<#UpperParse<'g, I::Up>>,
                 grammar: &'g grammar::InternalGrammar,
                 exhausted: bool,
-                finished_node: Option<NodeRef<'g, 'g, <I::Infer as $Infer>::T, $Value<I::Infer>>>,
-                store: Arena<$Value<I::Infer>>,
-                recognizer: Recognizer<'g, 'g, Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>>,
-                bocage: Box<Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>>,
-                traversal: TraversalUnordered<'g, I::Node, $Value<I::Infer>>,
+                finished_node: Option<NodeRef<'g, 'g, <I::Infer as #Infer>::T, #Value<I::Infer>>>,
+                store: Arena<#Value<I::Infer>>,
+                recognizer: Recognizer<'g, 'g, Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                bocage: Box<Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                traversal: TraversalUnordered<'g, I::Node, #Value<I::Infer>>,
                 scanned: Vec<(Symbol, I::Node)>,
                 indices_scanned: Vec<usize>,
                 inference_marker: ::std::marker::PhantomData<I>,
@@ -559,8 +554,8 @@ impl GenParser {
 
             // Either `advance` or `traced_advance` may be dead code.
             #[allow(dead_code)]
-            impl<'g, I> $Parse<'g, I>
-                where I: $InferTree<'g> + 'g
+            impl<'g, I> #Parse<'g, I>
+                where I: #InferTree<'g> + 'g
             {
                 fn begin_earleme(&mut self) {
                     if self.recognizer.is_finished() {
@@ -574,9 +569,9 @@ impl GenParser {
                     }
                     if self.exhausted {
                         // Declare tokens.
-                        let upper_terminals = $UpperTerminalAccessor;
+                        let upper_terminals = #UpperTerminalAccessor;
                         let tokens = &[
-                            $(upper_terminals.$outer_terminal_name()),*
+                            #(upper_terminals.#outer_terminal_name()),*
                         ];
                         // Parse the finished part in the upper layer.
                         self.parse.begin_earleme();
@@ -652,60 +647,60 @@ impl GenParser {
                 }
             }
 
-            impl<'g, I> Iterator for $Parse<'g, I>
-                where I: $InferTree<'g> + 'g
+            impl<'g, I> Iterator for #Parse<'g, I>
+                where I: #InferTree<'g> + 'g
             {
-                type Item = <$UpperParse<'g, I::Up> as Iterator>::Item;
+                type Item = <#UpperParse<'g, I::Up> as Iterator>::Item;
                 fn next(&mut self) -> Option<Self::Item> {
                     self.parse.next()
                 }
             }
 
-            trait $Infer {
+            trait #Infer {
                 type T: Copy;
-                $(type $infer_name;)*
+                #(type #infer_name;)*
             }
 
             #[derive(Clone, Copy)]
-            struct $ValueInfer<T, $($i2),*>(
-                ::std::marker::PhantomData<(T, $($i3),*)>
+            struct #ValueInfer<T, #(#i2),*>(
+                ::std::marker::PhantomData<(T, #(#i3),*)>
             );
 
-            impl<T, $($i4),*> $Infer for $ValueInfer<T, $($i5),*>
+            impl<T, #(#i4),*> #Infer for #ValueInfer<T, #(#i5),*>
                 where T: Copy,
             {
                 type T = T;
-                $(type $i6 = $i7;)*
+                #(type #i6 = #i7;)*
             }
 
-            trait $InferTree<'g> {
-                type Up: $UpperInferTree<
+            trait #InferTree<'g> {
+                type Up: #UpperInferTree<
                     'g,
                     Node = NodeRef<
                         'g,
                         'g,
-                        <Self::Infer as $Infer>::T,
-                        $Value<Self::Infer>
+                        <Self::Infer as #Infer>::T,
+                        #Value<Self::Infer>
                     >
                 > + 'g;
                 type Node: Copy + 'g;
-                type Infer: $Infer + $LowerInferConstraint<'g, Self::Node> + 'g;
+                type Infer: #Infer + #LowerInferConstraint<'g, Self::Node> + 'g;
             }
 
-            struct $InferTreeVal<Up, Node, I>(::std::marker::PhantomData<(Up, Node, I)>);
+            struct #InferTreeVal<Up, Node, I>(::std::marker::PhantomData<(Up, Node, I)>);
 
-            impl<'g, Up, Node, I> $InferTree<'g> for $InferTreeVal<Up, Node, I>
-                where Up: $UpperInferTree<'g, Node = NodeRef<'g, 'g,  I::T, $Value<I>>> + 'g,
+            impl<'g, Up, Node, I> #InferTree<'g> for #InferTreeVal<Up, Node, I>
+                where Up: #UpperInferTree<'g, Node = NodeRef<'g, 'g,  I::T, #Value<I>>> + 'g,
                       Node: Copy + 'g,
-                      I: $Infer + $LowerInferConstraint<'g, Node> + 'g
+                      I: #Infer + #LowerInferConstraint<'g, Node> + 'g
             {
                 type Up = Up;
                 type Node = Node;
                 type Infer = I;
             }
 
-            trait $InferConstraint<'g, Node> {}
-            impl<'g, Node, T> $InferConstraint<'g, Node> for T {}
+            trait #InferConstraint<'g, Node> {}
+            impl<'g, Node, T> #InferConstraint<'g, Node> for T {}
         }
     }
 
@@ -713,28 +708,28 @@ impl GenParser {
         // let external_start = self.trans.ir.externalize(self.trans.ir.grammar.get_start());
 
         let start_type = self.start_type
-                         .generate_qualified(self.builder, self.unique_names.Infer);
+                         .generate_qualified(self.unique_names.Infer);
         let start_variant = self.start_variant;
 
         let UniqueNames {
             Parse, Value, InferTree, ..
         } = self.unique_names;
 
-        quote_tokens! {cx,
-            struct $Parse<'g, I> where I: $InferTree<'g> + 'g {
-                store: Arena<$Value<I::Infer>>,
-                recognizer: Recognizer<'g, 'g, Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>>,
-                finished_node: Option<NodeRef<'g, 'g, I::Node, $Value<I::Infer>>>,
+        quote! {
+            struct #Parse<'g, I> where I: #InferTree<'g> + 'g {
+                store: Arena<#Value<I::Infer>>,
+                recognizer: Recognizer<'g, 'g, Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                finished_node: Option<NodeRef<'g, 'g, I::Node, #Value<I::Infer>>>,
                 // This field is seen as unused.
                 #[allow(dead_code)]
-                bocage: Box<Bocage<'g, 'g, 'g, I::Node, $Value<I::Infer>>>,
-                traversal: TraversalUnordered<'g, I::Node, $Value<I::Infer>>,
-                result: ::std::slice::Iter<'g, $Value<I::Infer>>,
+                bocage: Box<Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                traversal: TraversalUnordered<'g, I::Node, #Value<I::Infer>>,
+                result: ::std::slice::Iter<'g, #Value<I::Infer>>,
             }
 
             #[allow(dead_code)]
-            impl<'g, I> $Parse<'g, I>
-                where I: $InferTree<'g> + 'g
+            impl<'g, I> #Parse<'g, I>
+                where I: #InferTree<'g> + 'g
             {
                 fn begin_earleme(&mut self) {
                     // Nothing to do
@@ -807,13 +802,13 @@ impl GenParser {
                 }
             }
 
-            impl<'g, I> Iterator for $Parse<'g, I>
-                where I: $InferTree<'g> + 'g,
+            impl<'g, I> Iterator for #Parse<'g, I>
+                where I: #InferTree<'g> + 'g,
             {
-                type Item = &'g $start_type;
+                type Item = &'g #start_type;
                 fn next(&mut self) -> Option<Self::Item> {
                     match self.result.next() {
-                        Some(&$Value::$start_variant(ref value)) => Some(value),
+                        Some(&#Value::#start_variant(ref value)) => Some(value),
                         _ => None,
                     }
                 }
@@ -826,33 +821,33 @@ impl GenParser {
             ValueInfer, InferTreeVal, Parse, ParseFactory, lower_layer_macro, ..
         } = self.unique_names;
 
-        let traversal = quote_tokens! {cx, traversal};
-        let store = quote_tokens! {cx, store};
+        let traversal = quote! { traversal};
+        let store = quote! { store};
         let closure = self.translate_closure(cx, traversal, store);
-        let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
+        let infer_wildcards = iter::repeat(quote! { _ })
                               .take(self.infer.len());
 
-        quote_tokens! {cx,
+        quote! {
             // ########### QUOTED CODE #########################
-            $lower_layer_macro!(@builder
-                @factory [$ParseFactory::new()]
+            #lower_layer_macro!(@builder
+                @factory [#ParseFactory::new()]
                 @closure [|mut parse| {
                     {
                         // Partially guide the inference of the argument's type.
-                        let _: &$Parse<
-                            $InferTreeVal<_, $ValueInfer<_, $($infer_wildcards),*>>
-                        > = &*$lower_layer_macro!(@get parse);
+                        let _: &#Parse<
+                            #InferTreeVal<_, #ValueInfer<_, #(#infer_wildcards),*>>
+                        > = &*#lower_layer_macro!(@get parse);
                     };
-                    let &mut $Parse {
+                    let &mut #Parse {
                         ref mut traversal,
                         ref store,
                         finished_node,
                         ref mut result,
                         ..
-                    } = &mut *$lower_layer_macro!(@get parse);
+                    } = &mut *#lower_layer_macro!(@get parse);
                     let root = finished_node.unwrap();
                     // ===
-                    $closure
+                    #closure
                     // ===
                     *result = match root.get() {
                         Evaluated { values } => values.iter(),
@@ -870,8 +865,8 @@ impl GenParser {
         } = self.unique_names;
         let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         // cannot put these in variables, because that would cause a compilation error.
-        let traversal = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).traversal};
-        let store = quote_tokens! {cx, $lower_layer_macro!(@get $dol parse).store};
+        let traversal = quote! { #lower_layer_macro!(@get #dol parse).traversal};
+        let store = quote! { #lower_layer_macro!(@get #dol parse).store};
         let closure = self.translate_closure(cx, traversal, store);
         // Terminals and their variants
         let &GenArgumentsFromOuterLayer {
@@ -885,44 +880,44 @@ impl GenParser {
         });
         let terminal_bare_variants = terminal_bare_variants.iter();
         // Wildcards
-        let infer_wildcards = iter::repeat(AstBuilder::new().ty().infer())
+        let infer_wildcards = iter::repeat(quote! { _ })
                               .take(self.infer.len());
-        quote_tokens! {cx,
-            macro_rules! $layer_macro {
+        quote! {
+            macro_rules! #layer_macro {
                 (
                     @closure
-                    $dol upper_builder:expr,
-                    $dol parse:expr,
-                    $dol node:expr;
+                    #dol upper_builder:expr,
+                    #dol parse:expr,
+                    #dol node:expr;
                 ) => ({
                     // Assist the inference.
                     {
                         let _: &::std::marker::PhantomData<
-                            $InferTreeVal<_, _, $ValueInfer<_, $($infer_wildcards),*>>
-                        > = &$lower_layer_macro!(@get $dol parse).inference_marker;
+                            #InferTreeVal<_, _, #ValueInfer<_, #(#infer_wildcards),*>>
+                        > = &#lower_layer_macro!(@get #dol parse).inference_marker;
                     };
-                    let upper_builder = &mut $dol upper_builder;
-                    let sym = ($dol node).terminal;
-                    let root = ($dol node).value;
+                    let upper_builder = &mut #dol upper_builder;
+                    let sym = (#dol node).terminal;
+                    let root = (#dol node).value;
                     // === Deeper code
-                    $closure
+                    #closure
                     // === Result
                     let result = match root.get() {
                         Evaluated { values } => values,
                         _ => unreachable!()
                     };
                     upper_builder.reserve(result.len());
-                    let upper_terminals = $UpperTerminalAccessor;
-                    $(
-                        if sym == upper_terminals.$terminal_names() {
+                    let upper_terminals = #UpperTerminalAccessor;
+                    #(
+                        if sym == upper_terminals.#terminal_names() {
                             for value in result {
                                 let inner =
-                                if let $Value::$terminal_variants(inner) = value.clone() {
+                                if let #Value::#terminal_variants(inner) = value.clone() {
                                     inner
                                 } else {
                                     unreachable!()
                                 };
-                                upper_builder.push($UpperValue::$terminal_bare_variants(inner));
+                                upper_builder.push(#UpperValue::#terminal_bare_variants(inner));
                             }
                         }
                     )else*
@@ -930,14 +925,14 @@ impl GenParser {
                         unreachable!("wrong sym")
                     }
                 });
-                (@builder @factory [$dol factory:expr] @closure [$dol closure:expr]) => (
-                    $lower_layer_macro!(@builder
-                        @factory [$Layer::new().with_parse_builder($dol factory)]
-                        @closure [$dol closure]
+                (@builder @factory [#dol factory:expr] @closure [#dol closure:expr]) => (
+                    #lower_layer_macro!(@builder
+                        @factory [#Layer::new().with_parse_builder(#dol factory)]
+                        @closure [#dol closure]
                     )
                 );
-                (@get $dol parse:expr) => (
-                    $lower_layer_macro!(@get $dol parse.parse)
+                (@get #dol parse:expr) => (
+                    #lower_layer_macro!(@get #dol parse.parse)
                 )
             }
         }
@@ -970,17 +965,17 @@ impl GenParser {
         let UniqueNames { Value, lower_layer_macro, .. } = self.unique_names;
         let Value_ = Value;
 
-        quote_tokens! {cx,
+        quote! {
             // ########### QUOTED CODE #########################
             let mut cartesian_product = CartesianProduct::new();
-            $traversal.traverse(root);
+            #traversal.traverse(root);
             loop {
-                if let Some(deps) = $traversal.traverse_deps() {
+                if let Some(deps) = #traversal.traverse_deps() {
                     for node in deps {
                         match node {
                             TraversalBottom::Leaf(node) => {
-                                let mut builder = SliceBuilder::new(&$store, 0);
-                                $lower_layer_macro!(
+                                let mut builder = SliceBuilder::new(&#store, 0);
+                                #lower_layer_macro!(
                                     @closure
                                     builder,
                                     parse,
@@ -990,14 +985,14 @@ impl GenParser {
                             }
                             TraversalBottom::Null(nulling) => {
                                 // The builder may be unused.
-                                let mut _builder = SliceBuilder::new(&$store, 0);
+                                let mut _builder = SliceBuilder::new(&#store, 0);
                                 // Use external symbols.
                                 match nulling.symbol.usize() {
-                                    $(
-                                        $null_symbol_id => {
-                                            _builder.reserve($null_num_summands);
-                                            $null_sym_name!(|result| {
-                                                _builder.push($Value::$null_variant(result));
+                                    #(
+                                        #null_symbol_id => {
+                                            _builder.reserve(#null_num_summands);
+                                            #null_sym_name!(|result| {
+                                                _builder.push(#Value::#null_variant(result));
                                             });
                                         }
                                     )*
@@ -1012,9 +1007,9 @@ impl GenParser {
                 } else {
                     break;
                 }
-                for node in $traversal.traverse_sum() {
+                for node in #traversal.traverse_sum() {
                     let count = node.iter().map(|alt| alt.len()).fold(0, |acc, elem| acc + elem);
-                    let mut slice_builder = SliceBuilder::new(&$store, count);
+                    let mut slice_builder = SliceBuilder::new(&#store, count);
                     // ... eval:
                     for alt in node.iter() {
                         cartesian_product.from_production(&alt);
@@ -1023,30 +1018,30 @@ impl GenParser {
                             let result = {
                                 let args = cartesian_product.as_slice();
                                 match alt.action() {
-                                    $(
-                                        $action_id => {
+                                    #(
+                                        #action_id => {
                                             // `true` is to avoid irrefutable patterns
-                                            let val = (true, $(args[$arg_num].clone(),)*);
+                                            let val = (true, #(args[#arg_num].clone(),)*);
                                             if let (true,
-                                                    $($Value::$arg_variant($arg_pat),)*) = val {
-                                                $Value_::$rule_variant($rules_expr)
+                                                    #(#Value::#arg_variant(#arg_pat),)*) = val {
+                                                #Value_::#rule_variant(#rules_expr)
                                             } else {
                                                 unreachable!()
                                             }
                                         }
                                     )*
-                                    $(
-                                        $seq_action_id => {
+                                    #(
+                                        #seq_action_id => {
                                             let seq_vec = args.iter().map(|arg| {
                                                 let val = (true, (*arg).clone());
                                                 if let (true,
-                                                        $Value::$seq_element_variant(elem)) = val {
+                                                        #Value::#seq_element_variant(elem)) = val {
                                                     elem
                                                 } else {
                                                     unreachable!()
                                                 }
                                             }).collect::<Vec<_>>();
-                                            $Value_::$seq_variant(seq_vec)
+                                            #Value_::#seq_variant(seq_vec)
                                         }
                                     )*
                                     _ => unreachable!("rule id {}", alt.action())
@@ -1082,11 +1077,11 @@ impl GenParser {
         // The inner layer is missing. Put placeholding definitions in the inner layer.
         // - How will the parse builder work with an identity layer?
         // - I think it won't. The main parse builder will be Identity.
-        quote_tokens! {cx,
+        quote! {
             // ########### QUOTED CODE #########################
-            macro_rules! $lower_layer_macro {
-                (@builder @factory [$dol factory:expr] @closure [$dol closure:expr]) => (Identity);
-                (@get $dol parse:expr) => ($dol parse);
+            macro_rules! #lower_layer_macro {
+                (@builder @factory [#dol factory:expr] @closure [#dol closure:expr]) => (Identity);
+                (@get #dol parse:expr) => (#dol parse);
             }
 
             pub struct Identity;
@@ -1103,7 +1098,7 @@ impl GenParser {
             rs::TokenTree::Token(
                 rs::DUMMY_SP,
                 rs::Token::Literal(
-                    rs::token::Char(rs::intern(&*num.to_string())),
+                    rs::token::Char(rs::Symbol::gensym(&*num.to_string())),
                     None
                 )
             )
@@ -1123,22 +1118,22 @@ impl GenParser {
         let start = invoc.char_ranges.iter().map(|range| range.start).map(to_char_literal);
         let end = invoc.char_ranges.iter().map(|range| range.end).map(to_char_literal);
         // The lexer invocation.
-        quote_tokens! {cx,
+        quote! {
             // ########### QUOTED CODE #########################
             // Inner layer.
-            $lexer_name! {
+            #lexer_name! {
                 // Arguments for the inner layer.
-                #![$lexer_attr($($terminal_names),*)]
+                #![#lexer_attr(#(#terminal_names),*)]
                 // Implicit string rules.
-                $(
-                    $str_lhs ::= $str_rhs_exprs;
+                #(
+                    #str_lhs ::= #str_rhs_exprs;
                 )*
                 // Implicit char ranges. Only present with an implicit char_classifier.
-                $(
-                    $char_range_lhs ::= $start ... $end;
+                #(
+                    #char_range_lhs ::= #start ... #end;
                 )*
                 // Explicit code.
-                $lexer_tts
+                #lexer_tts
             }
             // ########### END QUOTED CODE
         }
@@ -1146,73 +1141,60 @@ impl GenParser {
 }
 
 impl GenType {
-    pub fn generate(&self, builder: AstBuilder) -> rs::P<rs::Ty> {
+    pub fn generate(&self) -> rs::TokenStream {
         match self {
             &GenType::RustTy(ref ty) => ty.clone(),
-            &GenType::Unit => builder.ty().unit(),
-            &GenType::Identifier(name) => builder.ty().id(name),
+            &GenType::Unit => {
+                quote! { () }   
+            }
+            &GenType::Identifier(name) => {
+                quote! { #name }
+            }
             &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate(builder));
-                }
-                ty_build.build()
+                let types = fields.iter().map(|field|
+                    field.generate()
+                ).collect::<Vec<_>>();
+                quote! { ( #(#types),* ) }
             }
             &GenType::Item(name) => {
-                builder.ty().path().segment(name).with_generics(
-                    builder.generics().ty_param("I").build().build()
-                ).build().build()
+                quote! { #name<I> }
             }
             &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec").with_ty(elem_ty.generate(builder)).build()
-                    .build()
+                let gen_elem_ty = elem_ty.generate();
+                quote! { Vec<#gen_elem_ty> }
             }
             &GenType::Infer(name) => {
-                builder.ty().path().id("I").id(&name).build()
+                quote! { I::#name }
             }
             &GenType::Terminal => {
-                builder.ty().path().id("I").id("T").build()
+                quote! { I::T }
             }
         }
     }
 
-    pub fn generate_qualified(&self, builder: AstBuilder, infer_trait: rs::ast::Ident)
-        -> rs::P<rs::Ty>
+    pub fn generate_qualified(&self, infer_trait: rs::ast::Ident) -> rs::TokenStream
     {
         match self {
             &GenType::Tuple(ref fields) => {
-                let mut ty_build = builder.ty().tuple();
-                for field in fields {
-                    ty_build = ty_build.with_ty(field.generate_qualified(builder, infer_trait));
-                }
-                ty_build.build()
+                let types = fields.iter().map(|field|
+                    field.generate_qualified(infer_trait)
+                ).collect::<Vec<_>>();
+                quote! { ( #(#types),* ) }
             }
             &GenType::Item(name) => {
-                builder.ty().
-                    path().segment(name).ty().path().id("I").id("Infer").build().build()
-                .build()
+                quote! { #name<I::Infer> }
             }
             &GenType::Vec(ref elem_ty) => {
-                builder.ty()
-                    .path()
-                        .segment("Vec")
-                            .with_ty(elem_ty.generate_qualified(builder, infer_trait))
-                        .build()
-                    .build()
+                let gen_elem_ty = elem_ty.generate_qualified(infer_trait);
+                quote! { Vec<#gen_elem_ty> }
             }
             &GenType::Infer(name) => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id(name)
+                quote! { <I::Infer as #infer_trait>::#name }
             }
             &GenType::Terminal => {
-                builder.ty()
-                    .qpath().ty().path().id("I").id("Infer").build().as_().id(infer_trait).build()
-                    .id("T")
+                quote! { <I::Infer as #infer_trait>::T }
             }
-            _ => self.generate(builder)
+            _ => self.generate()
         }
     }
 }

@@ -10,7 +10,7 @@ use rs;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Ty<S = Symbol> {
-    RustTy(rs::P<rs::Ty>),
+    RustTy(rs::Tokens),
     Auto(AutoTy<S>),
     SequenceVec(S),
     Infer,
