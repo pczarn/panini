@@ -2,7 +2,7 @@ use std::mem;
 
 use panini_codegen::rs;
 use panini_codegen::front::lexer::Lexer;
-use panini_codegen::front::{Stmts, Stmt, Rhs, RhsAst, RhsElement, Action, Sequence};
+use panini_codegen::front::{Stmts, Stmt, Product, Factor, RhsElement, Action, Sequence};
 
 use util::delimit;
 
@@ -155,11 +155,13 @@ impl Parser {
 
             top_rhs ::=
                 elems:pat_elem* block:action => {
-                    vec![(Rhs(elems), Action { expr: block })]
+                    let product = create_entity().with(Product(elems)).with(Action { expr: block });
+                    vec![product]
                 }
                 | v:top_rhs pipe elems:pat_elem* block:action => {
                     let mut v = v;
-                    v.push((Rhs(elems), Action { expr: block }));
+                    let product = create_entity().with(Product(elems)).with(Action { expr: block });
+                    v.push(product);
                     v
                 };
 

@@ -9,7 +9,7 @@ use middle::lint::{Lint, Level};
 
 pub struct Attrs<S> {
     arguments_from_outer_layer: Option<ArgumentsFromOuterLayer<S>>,
-    lint_levels: HashMap<rs::InternedString, Level>,
+    lint_levels: HashMap<rs::Ident, Level>,
     pub overruled_lint: Vec<rs::Span>,
     pub invalid_lint: Vec<rs::Span>,
     pub unused_attrs: Vec<rs::Span>,
@@ -23,62 +23,66 @@ pub struct ArgumentsFromOuterLayer<S> {
     terminals: Vec<S>,
 }
 
-impl Attrs<rs::Name> {
+impl Attrs<rs::Ident> {
     pub fn compute(attrs: &[rs::Attribute]) -> Result<Self, TransformationError> {
         let mut lexer_attr = None;
         let mut lint_attrs = vec![];
         let mut invalid_lint_attrs = HashSet::new();
         let mut unused_attrs = vec![];
         for attr in attrs {
-            match &attr.node.value.node {
-                &rs::ast::MetaItemKind::List(ref name, ref list) => {
-                    if name.starts_with("lexer_") {
-                        if lexer_attr.is_some() {
-                            return Err(TransformationError::InvalidAttr(attr.span));
-                        }
-                        lexer_attr = Some((name.clone(), list.clone()));
-                        continue;
-                    }
+            let name = &*attr.path.segments[0].identifier.name.as_str();
+            if name.starts_with("lexer_") {
+                if lexer_attr.is_some() || attr.path.segments.len() > 1 {
+                    return Err(TransformationError::InvalidAttr(attr.span));
                 }
-                _ => {}
-            }
-
-            if let Some(lint_level) = Level::from_str(&*attr.name()) {
-                let meta = &attr.node.value;
-                let metas = match meta.node {
-                    rs::ast::MetaItemKind::List(_, ref metas) => metas,
-                    _ => {
-                        lint_attrs.push(Err(meta.span));
-                        continue;
-                    }
-                };
-
-                for meta in metas {
-                    lint_attrs.push(match meta.node {
-                        rs::ast::MetaItemKind::Word(ref lint_name) => {
-                            Ok((lint_name.clone(), lint_level, meta.span))
-                        }
-                        _ => {
-                            Err(meta.span)
-                        }
-                    });
-                }
+                lexer_attr = Some((name.clone(), attr.tokens.clone()));
                 continue;
             }
 
-            unused_attrs.push(attr.span);
+            if let Some(lint_level) = Level::from_str(name) {
+                let cursor = attr.tokens.trees();
+
+                while let Some(tt) = cursor.next() {
+                    match cursor.next() {
+                        Some(rs::TokenTree::Token::Punct(rs::Punct { op: ',', .. })) | None => {}
+                        Some(tt) => {
+                            lint_attrs.push(Err(tt.span()));
+                            continue;
+                        }
+                        None => {
+                            lint_attrs.push(Err(attr.span));
+                            continue;
+                        }
+                    }
+                    match tt {
+                        rs::TokenTree::Ident(rs::Ident { inner, .. }) => {
+                            lint_attrs.push(Ok((inner, lint_level, rs::Span::call_site())));
+                        }
+                        _ => {
+                            lint_attrs.push(Err(tt.span()));
+                        }
+                    }
+                }
+            } else {
+                unused_attrs.push(attr.span);
+            }
         }
         // Map the lexer attr.
-        let arguments_from_outer_layer = lexer_attr.map(|(lexer_level, list)| {
+        let arguments_from_outer_layer = lexer_attr.map(|(lexer_level, tokens)| {
             let level = lexer_level["lexer_".len() ..].parse().unwrap();
             let mut terminals = vec![];
-            for word in list {
-                match &word.node {
-                    &rs::ast::MetaItemKind::Word(ref terminal) => {
-                        let name = rs::intern(&*terminal);
-                        terminals.push(name);
+            let cursor = tokens.trees();
+
+            while let Some(tt) = cursor.next() {
+                match cursor.next() {
+                    Some(rs::TokenTree::Punct(rs::Punct { op: ',', .. })) | None => {}
+                    tt => unreachable!()
+                }
+                match tt {
+                    rs::TokenTree::Ident(rs::Ident { inner, .. }) => {
+                        terminals.push(inner);
                     }
-                    _ => unreachable!() // error
+                    _ => unreachable!()
                 }
             }
             ArgumentsFromOuterLayer {
@@ -145,7 +149,7 @@ impl<S> Attrs<S> {
     }
 
     pub fn get_lint_level(&self, lint: Lint) -> Level {
-        let ident = rs::intern_and_get_ident(lint.name());
+        let ident = rs::Term::intern(lint.name());
         self.lint_levels.get(&ident).cloned().unwrap_or(lint.default_level())
     }
 }

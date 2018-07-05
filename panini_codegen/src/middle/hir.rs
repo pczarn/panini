@@ -267,7 +267,7 @@ struct FlatRule {
     // Indexes are RHS positions.
     tuple_binds: Vec<usize>,
     deep_binds: Vec<usize>,
-    shallow_binds: Vec<(usize, rs::ast::Ident)>,
+    shallow_binds: Vec<(usize, rs::Ident)>,
     auto_ty: AutoTy<rs::Name>,
     source_origin: SourceOrigin,
 }
@@ -372,7 +372,7 @@ impl RhsAstVisitor for FlattenRhsAst {
     }
 
     fn visit_sum(&mut self, sum: &[ast::Rhs]) {
-        let new_lhs = rs::dummy_spanned(rs::gensym("GS"));
+        let new_lhs = rs::dummy_spanned(rs::Name::gensym("GS"));
         for rule in sum {
             self.rule_stack.push(FlatRule::new(new_lhs, self.rule_id, self.cur_rule_pos));
             // Don't visit product, because it would add an intermediate
@@ -389,7 +389,7 @@ impl RhsAstVisitor for FlattenRhsAst {
     }
 
     fn visit_product(&mut self, product: &ast::Rhs) {
-        let new_lhs = rs::dummy_spanned(rs::gensym("GP"));
+        let new_lhs = rs::dummy_spanned(rs::Name::gensym("GP"));
         // The inner rule goes to `rule_stack`.
         self.rule_stack.push(FlatRule::new(new_lhs, self.rule_id, self.cur_rule_pos));
         self.cur_rule_pos += 1;
@@ -402,7 +402,7 @@ impl RhsAstVisitor for FlattenRhsAst {
     }
 
     fn visit_rhs_string(&mut self, string: Name) {
-        let new_sym = rs::dummy_spanned(rs::gensym("GTerm"));
+        let new_sym = rs::dummy_spanned(rs::Name::gensym("GTerm"));
         self.embedded_strings.push(EmbeddedString {
             symbol: new_sym,
             string: string,
@@ -415,39 +415,40 @@ impl RhsAstVisitor for FlattenRhsAst {
         self.append_symbol(new_sym, false);
     }
 
-    fn visit_bind(&mut self, bind: &Option<rs::P<rs::Pat>>) {
-        let current_rule = self.rule_stack.last_mut().unwrap();
-        let num_syms = current_rule.rhs.len() - 1;
-        let last_sym = *current_rule.rhs.last().unwrap();
-        if let &Some(ref pat) = bind {
-            match &pat.node {
-                &rs::PatKind::Wild => {}
-                &rs::PatKind::Ident(_mode, spanned_ident, None) => {
-                    let bind_name = spanned_ident.node;
-                    current_rule.shallow_binds.push((num_syms, bind_name));
-                    match current_rule.auto_ty {
-                        AutoTy::Tuple { .. } => {
-                            let mut members = HashMap::new();
-                            members.insert(bind_name, last_sym.node);
-                            current_rule.auto_ty = AutoTy::Struct {
-                                members: members,
-                            };
-                        }
-                        AutoTy::Struct { ref mut members } => {
-                            members.insert(bind_name, last_sym.node);
-                        }
-                    }
-                }
-                _ => panic!("unsupported pattern"),
-            }
-        } else {
-            current_rule.tuple_binds.push(num_syms);
-            match current_rule.auto_ty {
-                AutoTy::Tuple { ref mut fields } => {
-                    fields.push(last_sym.node);
-                }
-                _ => {}
-            }
-        }
+    fn visit_bind(&mut self, bind: &ast::Bind) {
+        unimplemented!()
+        // let current_rule = self.rule_stack.last_mut().unwrap();
+        // let num_syms = current_rule.rhs.len() - 1;
+        // let last_sym = *current_rule.rhs.last().unwrap();
+        // if let &Some(ref pat) = bind {
+        //     match &pat.node {
+        //         &rs::PatKind::Wild => {}
+        //         &rs::PatKind::Ident(_mode, spanned_ident, None) => {
+        //             let bind_name = spanned_ident.node;
+        //             current_rule.shallow_binds.push((num_syms, bind_name));
+        //             match current_rule.auto_ty {
+        //                 AutoTy::Tuple { .. } => {
+        //                     let mut members = HashMap::new();
+        //                     members.insert(bind_name, last_sym.node);
+        //                     current_rule.auto_ty = AutoTy::Struct {
+        //                         members: members,
+        //                     };
+        //                 }
+        //                 AutoTy::Struct { ref mut members } => {
+        //                     members.insert(bind_name, last_sym.node);
+        //                 }
+        //             }
+        //         }
+        //         _ => panic!("unsupported pattern"),
+        //     }
+        // } else {
+        //     current_rule.tuple_binds.push(num_syms);
+        //     match current_rule.auto_ty {
+        //         AutoTy::Tuple { ref mut fields } => {
+        //             fields.push(last_sym.node);
+        //         }
+        //         _ => {}
+        //     }
+        // }
     }
 }

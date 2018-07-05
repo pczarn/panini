@@ -2,18 +2,20 @@ use rs;
 use lexer::Lexer;
 use front::Name;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Stmts {
-    pub attrs: Vec<rs::Attribute>,
+    pub attrs: Vec<rs::TokenStream>,
     pub stmts: Vec<Stmt>,
     pub lexer: Option<Lexer>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+pub type Ty = Option<rs::TokenStream>;
+
+#[derive(Clone, Debug)]
 pub struct Stmt {
     pub lhs: Name,
     pub rhs: PrecedencedLevels,
-    pub ty: Option<rs::P<rs::Ty>>,
+    pub ty: Ty,
     pub span: rs::Span,
 }
 
@@ -21,16 +23,18 @@ pub type PrecedencedLevels = Vec<AlternativesWithActions>;
 pub type AlternativesWithActions = Vec<RhsWithAction>;
 pub type RhsWithAction = (Rhs, Action);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Rhs(pub Vec<RhsElement>);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+pub type Bind = Option<rs::TokenStream>;
+
+#[derive(Clone, Debug)]
 pub struct RhsElement {
-    pub bind: Option<rs::P<rs::Pat>>,
+    pub bind: Bind,
     pub elem: RhsAst,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum RhsAst {
     Symbol(Name),
     Sequence(Sequence),
@@ -39,14 +43,16 @@ pub enum RhsAst {
     String(Name),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Sequence {
     pub rhs: Rhs,
     pub min: u32,
     pub max: Option<u32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+pub type Expr = Option<rs::TokenStream>;
+
+#[derive(Clone, Debug)]
 pub struct Action {
-    pub expr: Option<rs::P<rs::Expr>>,
+    pub expr: Expr,
 }
