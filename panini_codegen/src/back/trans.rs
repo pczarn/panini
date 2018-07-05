@@ -43,24 +43,22 @@ const CHAR_CLASSIFIER_MACRO_NAME: &'static str = "char_classifier";
 pub struct IrTranslator {
     // Intermediate representation (higher-level).
     pub ir: Ir,
-    // A builder for Rust code.
-    pub builder: AstBuilder,
 
     // temporary maps
     pub type_map: BTreeMap<Symbol, GenType>,
     type_with_inference: HashSet<Symbol>,
-    pub variant_names: BTreeMap<Symbol, rs::ast::Ident>,
+    pub variant_names: BTreeMap<Symbol, rs::Term>,
 
     // Compile-time assertions.
-    assert_type_equality: Vec<(rs::P<rs::Ty>, rs::P<rs::Ty>)>,
+    assert_type_equality: Vec<(rs::TokenStream, rs::TokenStream)>,
     // Terminal symbols.
     pub terminals: Vec<Symbol>,
     // Evaluated node variants with their inner types.
-    pub variant_map: Vec<(rs::ast::Ident, rs::P<rs::Ty>)>,
+    pub variant_map: Vec<(rs::Term, rs::TokenStream)>,
     // Automatic item definitions for AST representation.
-    pub item_definitions: Vec<rs::P<rs::Item>>,
+    pub item_definitions: Vec<rs::TokenStream>,
     // Types omitted by user are inferred.
-    pub infer: Vec<rs::ast::Ident>,
+    pub infer: Vec<rs::Term>,
     // Names of generated items
     unique_names: UniqueNames,
 }
@@ -91,7 +89,6 @@ impl IrTranslator {
             type_with_inference: HashSet::new(),
             assert_type_equality: vec![],
             infer: vec![],
-            builder: AstBuilder::new(),
             terminals: vec![],
             unique_names: UniqueNames::new(layer_id),
         };
@@ -111,7 +108,7 @@ impl IrTranslator {
 
         self.variant_map.extend(
             self.variant_names.iter().zip(self.type_map.iter()).map(|((sym1, name), (sym2, ty))| {
-                assert_eq!(sym1, sym2);
+                assert_eq!(sym1.as_str(), sym2.as_str());
                 (*name, ty.generate(builder))
             })
         );
@@ -237,10 +234,10 @@ impl IrTranslator {
                         quote! {}
                     )
                 };
-                let type = ty.generate();
+                let ty = ty.generate();
                 let member_defs = members.iter().map(|(&name, &sym)| {
-                    let type = self.type_map[&sym].generate();
-                    quote! { #name: #type }
+                    let ty = self.type_map[&sym].generate();
+                    quote! { #name: #ty }
                 });
                 let member_clones = members.iter().map(|(&name, _)| {
                     quote! { #name: #name.clone() }
@@ -251,7 +248,7 @@ impl IrTranslator {
                     }
 
                     impl<#generics> Clone for #capitalized_name {
-                        fn clone(&self) -> #type {
+                        fn clone(&self) -> #ty {
                             #capitalized_name {
                                 #(#member_clones)*
                             }
@@ -309,7 +306,7 @@ impl IrTranslator {
                 Some(name.0)
             };
             let capitalized = self.capitalized_name(&name.as_str()[..], opt_id);
-            (external_sym, rs::str_to_ident(&capitalized[..]))
+            (external_sym, rs::Ident::from_str(&capitalized[..]))
         }).collect();
     }
 
@@ -409,7 +406,7 @@ impl IrTranslator {
                 self.ir.name_of_external(sym).unwrap().to_ident()
             }).collect();
             let terminal_variants = arg.terminals().iter().map(|&sym| {
-                self.variant_names[&sym].name.as_str()
+                self.variant_names[&sym].as_str()
             }).collect::<Vec<_>>();
             let terminal_bare_variants = terminal_variants.iter().map(|name| {
                 (&name[.. name.rfind("_").unwrap()]).to_ident()
@@ -643,7 +640,7 @@ impl IrTranslator {
         // Here, the name must start with "_" so that we don't get "unnecessary mut"
         // warnings later on. Yes, underscore prefix works for ignoring more than just
         // "unused variable" warnings.
-        let continuation_label = rs::gensym_ident("_cont");
+        let continuation_label = rs::Symbol::gensym("_cont");
         for rule in self.ir.nulling_grammar.rules() {
             if rule.rhs().len() == 0 {
                 // Can `origin` be None? In sequences? No.
@@ -714,28 +711,17 @@ impl IrTranslator {
                             factors.push(sym);
                         }
                     }
-                    let mut inner_layer = self.builder.block().stmt().expr()
-                        .call().id(continuation_label).with_arg(action_expr).build().build();
+                    let mut inner_layer = quote! { #continuation_label(#action_expr) };
                     for (i, &factor) in factors.iter().enumerate().rev() {
                         let name = self.lowercase_name(self.ir.externalize(factor));
-                        let pat = pats.get(&i).cloned()
-                                              .unwrap_or_else(|| self.builder.pat().wild());
-                        let fn_decl = self.builder.fn_decl()
-                                .arg().with_pat(pat).ty().infer()
-                                .default_return();
-                        let closure = rs::ast::ExprKind::Closure(
-                            rs::ast::CaptureBy::Ref, // or Value
-                            fn_decl,
-                            inner_layer,
-                            rs::DUMMY_SP,
-                        );
-                        let closure = self.builder.expr().build_expr_kind(closure);
-                        inner_layer =
-                            self.builder.block().stmt().build_expr(
-                                    MacExprBuilder::build()
-                                        .path(self.builder.path().id(name).build())
-                                        .expr().build(closure).build()
-                                ).build();
+                        let pat = pats.get(&i).cloned().unwrap_or_else(|| quote! { _ });
+                        inner_layer = quote! {
+                            #name!(
+                                |#pat| {
+                                    #inner_layer
+                                }
+                            )
+                        };
                     }
                     null_rules[lhs.usize()].push(inner_layer);
                     null_num[lhs.usize()] += factors.iter().fold(1, |acc, &factor| {
@@ -797,21 +783,6 @@ impl IrTranslator {
         let rs_name = self.ir.name_of_external(sym).unwrap();
         let mut name = rs_name.as_str().to_string();
         write!(name, "_{}", rs_name.0).unwrap();
-        rs::str_to_ident(&name[..])
-    }
-}
-
-struct MacExprBuilder;
-
-impl MacExprBuilder {
-    fn build() -> aster::mac::MacBuilder<Self> {
-        aster::mac::MacBuilder::with_callback(MacExprBuilder)
-    }
-}
-
-impl aster::invoke::Invoke<rs::ast::Mac> for MacExprBuilder {
-    type Result = rs::P<rs::Expr>;
-    fn invoke(self, arg: rs::ast::Mac) -> rs::P<rs::Expr> {
-        AstBuilder::new().expr().build_expr_kind(rs::ast::ExprKind::Mac(arg))
+        rs::Symbol::gensym(&name[..])
     }
 }

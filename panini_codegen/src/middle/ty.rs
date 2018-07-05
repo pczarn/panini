@@ -8,15 +8,15 @@ use rs;
 
 //type RustTy = rs::P<rs::Ty>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Ty<S = Symbol> {
-    RustTy(rs::Tokens),
+    RustTy(rs::TokenStream),
     Auto(AutoTy<S>),
     SequenceVec(S),
     Infer,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum AutoTy<S = Symbol> {
     Tuple {
         fields: Vec<S>,

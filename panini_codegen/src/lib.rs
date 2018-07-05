@@ -11,6 +11,7 @@ extern crate syntax_pos;
 
 #[macro_use]
 extern crate quote;
+extern crate proc_macro2;
 
 extern crate bit_matrix;
 extern crate cfg;
@@ -33,7 +34,7 @@ use back::GenResult;
 
 pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
                 sp: rs::Span,
-                stmts: Stmts) -> Box<rs::MacResult + 'cx> {
+                stmts: Stmts) -> rs::TokenStream {
     match middle::ir::IrMapped::transform_from_stmts(stmts) {
         Ok(ir) => {
             ir.report_warnings(ecx);
@@ -41,31 +42,33 @@ pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
                 for error in errors {
                     report_error(ecx, sp, error);
                 }
-                return rs::DummyResult::any(rs::DUMMY_SP);
+                return rs::TokenStream::empty();
             }
             let result = back::IrTranslator::new(ir.into()).generate().translate(ecx);
             // Log the generated code.
             let _ = env_logger::init();
             match result {
                 GenResult::Parser(expr) => {
-                    info!("{}", rs::pprust::expr_to_string(&*expr));
-                    rs::MacEager::expr(expr)
+                    info!("{}", expr);
+                    // info!("{}", rs::pprust::expr_to_string(&*expr));
+                    expr.parse().unwrap()
                 }
                 GenResult::Lexer(stmts) => {
                     info!(" ========== BEGIN LEXER OUT");
-                    let mut whole_str = String::new();
-                    for stmt in &stmts {
-                        whole_str.push_str(&rs::pprust::stmt_to_string(stmt)[..]);
-                    }
-                    info!("{}", whole_str);
+                    info!("{}", stmts);                    
+                    // let mut whole_str = String::new();
+                    // for stmt in &stmts {
+                    //     whole_str.push_str(&rs::pprust::stmt_to_string(stmt)[..]);
+                    // }
+                    // info!("{}", whole_str);
                     info!(" ========== END LEXER OUT");
-                    rs::MacEager::stmts(rs::SmallVector::many(stmts))
+                    stmts.parse().unwrap()
                 }
             }
         },
         Err(error) => {
             report_error(ecx, sp, &error);
-            rs::DummyResult::any(rs::DUMMY_SP)
+            rs::TokenStream::empty()
         }
     }
 }

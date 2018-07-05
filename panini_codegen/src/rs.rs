@@ -3,6 +3,9 @@
 // Public imports
 
 pub use quote::Tokens;
+// pub use proc_macro2::Term;
+pub use quote::{Ident as Term};
+pub use proc_macro2::TokenStream;
 
 pub use syntax::ast;
 pub use syntax::tokenstream::{TokenTree, Delimited};
@@ -12,9 +15,9 @@ pub use syntax::parse::lexer;
 pub use syntax::ext::tt::transcribe;
 pub use syntax::parse::{self, token};
 pub use syntax::parse::token::*;
-pub use syntax::tokenstream::TokenStream;
+// pub use syntax::tokenstream::TokenStream;
 // pub use syntax_pos::symbol::Interner;
-pub use syntax_pos::symbol::Symbol;
+pub use syntax_pos::symbol::{Symbol, Ident};
 pub use syntax::symbol::InternedString;
 pub use syntax::attr::{mk_attr_id};
 pub use syntax::util::small_vector::SmallVector;
@@ -36,7 +39,6 @@ pub use syntax::codemap::{
     self,
     MacroBang,
     CodeMap,
-    mk_sp,
     BytePos,
     ExpnInfo,
     NameAndSpan,
@@ -45,13 +47,15 @@ pub use syntax::codemap::{
     Spanned,
     DUMMY_SP,
     respan,
-    spanned,
     dummy_spanned,
+    NO_EXPANSION
 };
 
 // Private imports
 
-use syntax::parse::ParseSess;
+pub fn mk_sp(lo: BytePos, hi: BytePos) -> Span {
+    Span { lo: lo, hi: hi, ctxt: NO_EXPANSION }
+}
 
 pub fn with_fake_extctxt<T, F>(f: F) -> T where F: Fn(&ExtCtxt) -> T {
     let parse_sess = ParseSess::new(FilePathMapping::empty());

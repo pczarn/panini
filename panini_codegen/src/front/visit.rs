@@ -17,7 +17,7 @@ pub trait RhsAstVisitor {
         self.walk_rhs_element(rhs_elem);
     }
 
-    fn visit_bind(&mut self, _bind: &Option<rs::P<rs::Pat>>) {
+    fn visit_bind(&mut self, _bind: &Bind) {
         // nothing to do.
     }
 

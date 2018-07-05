@@ -1,24 +1,25 @@
+use std::iter::FromIterator;
 use rs;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Lexer {
-    pub name: rs::Name,
-    pub tts: Vec<rs::TokenTree>,
+    pub name: rs::Term,
+    pub tts: rs::TokenStream,
 }
 
 impl Lexer {
-    pub fn new(name: rs::Name, tts: Vec<rs::TokenTree>) -> Self {
+    pub fn new(name: rs::Term, tts: Vec<rs::TokenTree>) -> Self {
         Lexer {
             name: name,
-            tts: tts
+            tts: rs::TokenStream::from_iter(tts.into_iter())
         }
     }
 
-    pub fn name(&self) -> rs::Name {
+    pub fn name(&self) -> rs::Term {
         self.name
     }
 
-    pub fn tts(&self) -> Vec<rs::TokenTree> {
+    pub fn tts(&self) -> rs::TokenStream {
         self.tts.clone()
     }
 }

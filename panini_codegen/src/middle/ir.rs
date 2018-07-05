@@ -97,7 +97,7 @@ impl InternalExternalNameMap {
 /// Describes how the inner layer will be invoked. Most of the time, the inner layer
 /// is either a sub-grammar described by the grammar author, or an implicit invocation of
 /// a character classifier.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum InvocationOfInnerLayer {
     Invoke {
         lexer_invocation: Lexer,
@@ -202,7 +202,7 @@ impl IrStmtsAndAttrs {
 
         if let &Some(ref from_outer) = attrs.arguments_from_outer_layer() {
             // Set the implicit start.
-            let start = rs::gensym("_lower_start_");
+            let start = rs::Term::intern("_lower_start_");
             for terminal in from_outer.terminals() {
                 let lower_start_stmt = ast::Stmt {
                     lhs: rs::dummy_spanned(start),
@@ -338,14 +338,14 @@ impl IrPrepared {
                         let char_ranges = regex_rewrite.get_ranges().clone().into_iter()
                                                                             .collect::<Vec<_>>();
                         for (i, &(_, sym)) in char_ranges.iter().enumerate() {
-                            let name = rs::gensym(&*format!("ChRange{}", i));
+                            let name = rs::Term::intern(&*format!("ChRange{}", i));
                             ir.name_map.insert_padded(sym, name);
                         }
                         InvocationOfInnerLayer::CharClassifier(char_ranges)
                     } else {
                         // We are at level 0 and adding strings to a newly created level 1.
                         InvocationOfInnerLayer::Invoke {
-                            lexer_invocation: Lexer::new(rs::intern("grammar"), vec![]),
+                            lexer_invocation: Lexer::new(rs::Term::intern("grammar"), vec![]),
                             embedded_strings: embedded_strings,
                         }
                     }
