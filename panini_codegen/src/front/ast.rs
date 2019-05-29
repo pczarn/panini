@@ -4,7 +4,7 @@ use front::Name;
 
 #[derive(Clone, Debug)]
 pub struct Stmts {
-    pub attrs: Vec<rs::Attribute>,
+    pub attrs: Vec<rs::TokenStream>,
     pub stmts: Vec<Stmt>,
     pub lexer: Option<Lexer>,
 }

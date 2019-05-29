@@ -22,7 +22,7 @@ pub enum AutoTy<S = Symbol> {
         fields: Vec<S>,
     },
     Struct {
-        members: HashMap<rs::ast::Ident, S>,
+        members: HashMap<rs::Ident, S>,
     },
 }
 
@@ -46,7 +46,7 @@ impl<S> Ty<S> {
 /// Iterator over symbols included in a type.
 pub enum Symbols<'a, S> where S: 'a {
     FieldSymbols(slice::Iter<'a, S>),
-    MemberSymbols(hash_map::Values<'a, rs::ast::Ident, S>),
+    MemberSymbols(hash_map::Values<'a, rs::Ident, S>),
 }
 
 impl<'a, S> Iterator for Symbols<'a, S>

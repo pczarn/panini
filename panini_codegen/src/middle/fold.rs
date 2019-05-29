@@ -68,8 +68,8 @@ pub trait FoldHir<S1>: FoldRule<S1>
 }
 
 pub struct Folder<'a> {
-    pub sym_map: HashMap<rs::Name, Symbol>,
-    pub sym_vec: Vec<Option<rs::Name>>,
+    pub sym_map: HashMap<rs::Ident, Symbol>,
+    pub sym_vec: Vec<Option<rs::Ident>>,
     sym_source: &'a mut SymbolSource,
 }
 

@@ -4,17 +4,17 @@ use std::iter;
 
 use cfg::symbol::Symbol;
 use cfg_regex::ClassRange;
-use gearley::grammar::InternalGrammar;
+use gearley::grammar::InternalGrammarParts;
 
 use rs;
-use proc_macro2::{Literal, TokenTree};
-// use quote::ToTokens;
+use quote::ByteStr;
+use quote::ToTokens;
 
 // Info for generation.
 
 pub struct GenParser {
     // Serialized grammar
-    pub grammar: InternalGrammar,
+    pub grammar_parts: InternalGrammarParts,
 
     // Properties of the start symbol
     pub start_variant: rs::Term,
@@ -60,16 +60,16 @@ pub struct GenParser {
 
 pub struct GenArgumentsFromOuterLayer {
     pub terminal_names: Vec<rs::Term>,
-    pub terminal_variants: Vec<rs::Term>,
+    pub terminal_variants: Vec<rs::InternedString>,
     pub terminal_bare_variants: Vec<rs::Term>,
 }
 
 // #[derive(Eq, PartialEq)]
 pub struct GenInvocationOfInnerLayer {
     pub lexer_name: rs::Term,
-    pub lexer_tts: rs::TokenStream,
+    pub lexer_tts: Vec<rs::TokenTree>,
     pub str_lhs: Vec<rs::Term>,
-    pub str_rhs: Vec<rs::Term>,
+    pub str_rhs: Vec<rs::Name>,
     pub char_range_lhs: Vec<rs::Term>,
     pub char_ranges: Vec<ClassRange>,
 }
@@ -85,7 +85,7 @@ pub struct GenEpsilonActions {
 #[derive(Debug)]
 pub struct GenEpsilonIntermediateRule {
     pub name: rs::Term,
-    pub blocks: rs::TokenStream,
+    pub blocks: Vec<rs::TokenTree>,
 }
 
 #[derive(Debug)]
@@ -103,14 +103,14 @@ pub struct GenEpsilonRootAction {
 pub struct GenRule {
     pub id: u32,
     pub variant: rs::Term,
-    pub action: rs::TokenStream,
+    pub action: rs::TokenTree,
     pub args: Vec<GenArg>,
 }
 
 pub struct GenArg {
     pub num: usize,
     pub variant: rs::Term,
-    pub pat: rs::TokenStream,
+    pub pat: rs::TokenTree,
 }
 
 // Sequcene rules
@@ -125,7 +125,7 @@ pub struct GenSequence {
 
 #[derive(Clone)]
 pub enum GenType {
-    RustTy(rs::TokenStream),
+    RustTy(rs::Tokens),
     Vec(Box<GenType>),
     Unit,
     Tuple(Vec<GenType>),
@@ -138,7 +138,7 @@ pub enum GenType {
 //------------------------------
 // Names of generated items. The number unique to this layer is put on every name.
 
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub struct UniqueNames {
     Value: rs::Term,
     ValueInfer: rs::Term,
@@ -176,34 +176,34 @@ impl UniqueNames {
         let lower_id = current_id + 1;
 
         UniqueNames {
-            ValueInfer: rs::Term::new(&*format!("ValueInfer{}", current_id), rs::Span::call_site()),
-            Value: rs::Term::new(&*format!("Value{}", current_id), rs::Span::call_site()),
-            Infer: rs::Term::new(&*format!("Infer{}", current_id), rs::Span::call_site()),
-            Layer: rs::Term::new(&*format!("Layer{}", current_id), rs::Span::call_site()),
-            ParseFactory: rs::Term::new(&*format!("ParseFactory{}", current_id), rs::Span::call_site()),
-            Parse: rs::Term::new(&*format!("Parse{}", current_id), rs::Span::call_site()),
-            TracedParse: rs::Term::new(&*format!("TracedParse{}", current_id), rs::Span::call_site()),
-            LayerParam: rs::Term::new(&*format!("LayerParam{}", current_id), rs::Span::call_site()),
-            Params: rs::Term::new(&*format!("Params{}", current_id), rs::Span::call_site()),
-            TerminalAccessor: rs::Term::new(&*format!("TerminalAccessor{}", current_id), rs::Span::call_site()),
-            EvalArg: rs::Term::new(&*format!("EvalArg{}", current_id), rs::Span::call_site()),
-            SERIALIZED_GRAMMAR: rs::Term::new(&*format!("SERIALIZED_GRAMMAR{}", current_id), rs::Span::call_site()),
-            UpperValue: rs::Term::new(&*format!("Value{}", upper_id), rs::Span::call_site()),
-            UpperParse: rs::Term::new(&*format!("Parse{}", upper_id), rs::Span::call_site()),
-            UpperParseFactory: rs::Term::new(&*format!("ParseFactory{}", upper_id), rs::Span::call_site()),
-            UpperLayerParam: rs::Term::new(&*format!("LayerParam{}", upper_id), rs::Span::call_site()),
-            UpperEvalArg: rs::Term::new(&*format!("EvalArg{}", upper_id), rs::Span::call_site()),
-            LowerEvalArg: rs::Term::new(&*format!("EvalArg{}", lower_id), rs::Span::call_site()),
-            layer_macro: rs::Term::new(&*format!("layer_macro{}", current_id), rs::Span::call_site()),
-            lower_layer_macro: rs::Term::new(&*format!("layer_macro{}", lower_id), rs::Span::call_site()),
-            UpperTerminalAccessor: rs::Term::new(&*format!("TerminalAccessor{}", upper_id), rs::Span::call_site()),
-            UpperInfer: rs::Term::new(&*format!("Infer{}", upper_id), rs::Span::call_site()),
-            LowerInfer: rs::Term::new(&*format!("Infer{}", lower_id), rs::Span::call_site()),
-            InferTree: rs::Term::new(&*format!("InferTree{}", current_id), rs::Span::call_site()),
-            InferTreeVal: rs::Term::new(&*format!("InferTreeVal{}", current_id), rs::Span::call_site()),
-            UpperInferTree: rs::Term::new(&*format!("InferTree{}", upper_id), rs::Span::call_site()),
-            InferConstraint: rs::Term::new(&*format!("InferConstraint{}", current_id), rs::Span::call_site()),
-            LowerInferConstraint: rs::Term::new(&*format!("InferConstraint{}", lower_id), rs::Span::call_site()),
+            ValueInfer: rs::Term::intern(&*format!("ValueInfer{}", current_id)),
+            Value: rs::Term::intern(&*format!("Value{}", current_id)),
+            Infer: rs::Term::intern(&*format!("Infer{}", current_id)),
+            Layer: rs::Term::intern(&*format!("Layer{}", current_id)),
+            ParseFactory: rs::Term::intern(&*format!("ParseFactory{}", current_id)),
+            Parse: rs::Term::intern(&*format!("Parse{}", current_id)),
+            TracedParse: rs::Term::intern(&*format!("TracedParse{}", current_id)),
+            LayerParam: rs::Term::intern(&*format!("LayerParam{}", current_id)),
+            Params: rs::Term::intern(&*format!("Params{}", current_id)),
+            TerminalAccessor: rs::Term::intern(&*format!("TerminalAccessor{}", current_id)),
+            EvalArg: rs::Term::intern(&*format!("EvalArg{}", current_id)),
+            SERIALIZED_GRAMMAR: rs::Term::intern(&*format!("SERIALIZED_GRAMMAR{}", current_id)),
+            UpperValue: rs::Term::intern(&*format!("Value{}", upper_id)),
+            UpperParse: rs::Term::intern(&*format!("Parse{}", upper_id)),
+            UpperParseFactory: rs::Term::intern(&*format!("ParseFactory{}", upper_id)),
+            UpperLayerParam: rs::Term::intern(&*format!("LayerParam{}", upper_id)),
+            UpperEvalArg: rs::Term::intern(&*format!("EvalArg{}", upper_id)),
+            LowerEvalArg: rs::Term::intern(&*format!("EvalArg{}", lower_id)),
+            layer_macro: rs::Term::intern(&*format!("layer_macro{}", current_id)),
+            lower_layer_macro: rs::Term::intern(&*format!("layer_macro{}", lower_id)),
+            UpperTerminalAccessor: rs::Term::intern(&*format!("TerminalAccessor{}", upper_id)),
+            UpperInfer: rs::Term::intern(&*format!("Infer{}", upper_id)),
+            LowerInfer: rs::Term::intern(&*format!("Infer{}", lower_id)),
+            InferTree: rs::Term::intern(&*format!("InferTree{}", current_id)),
+            InferTreeVal: rs::Term::intern(&*format!("InferTreeVal{}", current_id)),
+            UpperInferTree: rs::Term::intern(&*format!("InferTree{}", upper_id)),
+            InferConstraint: rs::Term::intern(&*format!("InferConstraint{}", current_id)),
+            LowerInferConstraint: rs::Term::intern(&*format!("InferConstraint{}", lower_id)),
         }
     }
 }
@@ -214,13 +214,13 @@ pub enum GenResult {
 }
 
 impl GenParser {
-    pub fn translate(&self) -> GenResult {
-        let common_defs = self.translate_common_defs();
-        let lexer_def = self.translate_lexer_def();
+    pub fn translate(&self, cx: &mut rs::ExtCtxt) -> GenResult {
+        let common_defs = self.translate_common_defs(cx);
+        let lexer_def = self.translate_lexer_def(cx);
 
         if let &Some(ref arguments_from_outer_layer) = &self.arguments_from_outer_layer {
-            let lexer_builder_def = self.translate_lexer_builder_def();
-            let layer_macro_def = self.translate_layer_macro_def(arguments_from_outer_layer);
+            let lexer_builder_def = self.translate_lexer_builder_def(cx);
+            let layer_macro_def = self.translate_layer_macro_def(cx, arguments_from_outer_layer);
 
             let block = quote!({
                 // ########### QUOTED CODE
@@ -233,9 +233,9 @@ impl GenParser {
             // let stmts = block.unwrap().unwrap().stmts;
             GenResult::Lexer(block.to_string())
         } else {
-            let parse_builder_def = self.translate_parse_builder_def();
-            let parse_def = self.translate_parse_def();
-            let parse_builder = self.translate_parse_builder();
+            let parse_builder_def = self.translate_parse_builder_def(cx);
+            let parse_def = self.translate_parse_def(cx);
+            let parse_builder = self.translate_parse_builder(cx);
 
             let expr = quote!({
                 // ########### QUOTED CODE
@@ -252,35 +252,37 @@ impl GenParser {
         }
     }
 
-    pub fn translate_common_defs(&self) -> rs::TokenStream {
+    pub fn translate_common_defs(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         let variant_name = self.variant_map.iter().map(|v| &v.0);
         let variant_type = self.variant_map.iter().map(|v| &v.1);
         let item_definitions = self.item_definitions.iter();
         // Macro definitions.
         let null_bind_name = self.epsilon_actions.rules.iter().map(|r| r.name);
-        let null_actions = self.epsilon_actions.rules.iter().map(|r| &r.blocks);
+        let null_actions = self.epsilon_actions.rules.iter().map(|r| r.blocks.iter());
         let continuation_label = iter::repeat(self.epsilon_actions.continuation_label);
         
         let terminal_name = self.terminal_names.iter();
         let terminal_id = self.terminal_ids.iter();
 
-        let dol: rs::TokenTree = rs::Punct::new('$', rs::Spacing::Alone).into();
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         let dol2 = dol.clone();
 
         let UniqueNames { Value, Infer, TerminalAccessor, .. } = self.unique_names;
 
-        quote! {
+        rust! {
             // ########### QUOTED CODE #########################
             #[derive(Clone)]
             #[allow(non_camel_case_types)]
-            enum #Value<I> where I: #Infer {
-                #(#variant_name(#variant_type),)*
+            enum {{Value}}<I> where I: {{Infer}} {
+                {% for (name, type) in variants %}
+                    {{name}}({{type}}),
+                {% endfor %}
             }
 
-            struct #TerminalAccessor;
+            struct {{TerminalAccessor}};
 
             #[allow(non_snake_case)]
-            impl #TerminalAccessor {
+            impl {{TerminalAccessor}} {
                 #(
                     #[inline]
                     fn #terminal_name(&self) -> Symbol {
@@ -296,7 +298,7 @@ impl GenParser {
                 macro_rules! #null_bind_name {
                     ($x:expr) => {{
                         let mut #continuation_label = $x;
-                        #null_actions
+                        #(#null_actions)*
                     }}
                 }
             )*
@@ -304,11 +306,21 @@ impl GenParser {
         }
     }
 
-    pub fn translate_parse_builder_def(&self) -> rs::TokenStream {
+    pub fn translate_parse_builder_def(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
+        // Grammar info.
+        let InternalGrammarParts {
+            ref storage,
+            num_syms,
+            num_rules,
+            num_external_syms,
+            num_internal_syms,
+            num_nulling_intermediate,
+            start_sym,
+            trivial_derivation,
+        } = self.grammar_parts;
         // Convert serialized data to a byte string literal.
         // FIXME [u8]=>str. let storage_str = ByteStr(&storage[..]);
-        let serialized = serde_cbor::to_vec(&self.grammar).unwrap();
-        let storage_str = Literal::byte_string(&serialized[..]);
+        let storage_str = ByteStr("");
         let trace_ids = self.trace_rule_ids.iter();
         let trace_map = self.trace_rule_pos.iter().map(|v| v.iter());
         let trace_tokens = self.trace_tokens.iter().map(|rule_tokens| {
@@ -318,6 +330,8 @@ impl GenParser {
         let sym_names = self.sym_names.iter().map(|name| {
             &name[..]
         });
+        // Convert a symbol to integer.
+        let start_sym = start_sym.usize();
         // Use internal symbols.
         let infer_name = self.infer.iter();
         let (i2, i3, i4, i5, i6, i7) = (infer_name.clone(), infer_name.clone(), infer_name.clone(),
@@ -352,7 +366,18 @@ impl GenParser {
 
             impl #ParseFactory {
                 fn new() -> #ParseFactory {
-                    let grammar: grammar::InternalGrammar = serde_cbor_from_slice(SERIALIZED_GRAMMAR).unwrap();
+                    let grammar = grammar::InternalGrammar::from_parts(
+                        grammar::InternalGrammarParts {
+                            storage: ::std::borrow::Cow::Borrowed(SERIALIZED_GRAMMAR),
+                            num_syms: #num_syms,
+                            num_rules: #num_rules,
+                            num_external_syms: #num_external_syms,
+                            num_internal_syms: #num_internal_syms,
+                            num_nulling_intermediate: #num_nulling_intermediate,
+                            start_sym: Symbol::from(#start_sym),
+                            trivial_derivation: #trivial_derivation,
+                        }
+                    );
                     #ParseFactory {
                         grammar: grammar,
                     }
@@ -418,11 +443,22 @@ impl GenParser {
         }
     }
 
-    pub fn translate_lexer_builder_def(&self) -> rs::TokenStream {
+    pub fn translate_lexer_builder_def(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         // Grammar info.
-        let storage = serde_cbor::to_vec(&self.grammar).unwrap();
+        let InternalGrammarParts {
+            ref storage,
+            num_syms,
+            num_rules,
+            num_external_syms,
+            num_internal_syms,
+            num_nulling_intermediate,
+            start_sym,
+            trivial_derivation,
+        } = self.grammar_parts;
         // Convert serialized data to a byte string literal.
-        let storage_str: TokenTree = Literal::byte_string(&storage[..]).into();
+        let storage_str = ByteStr(&storage[..]);
+        // Convert a symbol to integer.
+        let start_sym = start_sym.usize();
         // Use internal symbols for terminals.
         let arguments_from_outer_layer = self.arguments_from_outer_layer.as_ref().unwrap();
         let outer_terminal_name = arguments_from_outer_layer.terminal_names.iter();
@@ -453,7 +489,18 @@ impl GenParser {
                 }
 
                 fn with_parse_builder(self, builder: #UpperParseFactory) -> #ParseFactory {
-                    let grammar = serde_cbor_from_slice(#SERIALIZED_GRAMMAR);
+                    let grammar = grammar::InternalGrammar::from_parts(
+                        grammar::InternalGrammarParts {
+                            storage: ::std::borrow::Cow::Borrowed(#SERIALIZED_GRAMMAR),
+                            num_syms: #num_syms,
+                            num_rules: #num_rules,
+                            num_external_syms: #num_external_syms,
+                            num_internal_syms: #num_internal_syms,
+                            num_nulling_intermediate: #num_nulling_intermediate,
+                            start_sym: Symbol::from(#start_sym),
+                            trivial_derivation: #trivial_derivation,
+                        }
+                    );
                     #ParseFactory {
                         grammar: grammar,
                         builder: builder,
@@ -661,7 +708,7 @@ impl GenParser {
         }
     }
 
-    pub fn translate_parse_def(&self) -> rs::TokenStream {
+    pub fn translate_parse_def(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         // let external_start = self.trans.ir.externalize(self.trans.ir.grammar.get_start());
 
         let start_type = self.start_type
@@ -671,8 +718,6 @@ impl GenParser {
         let UniqueNames {
             Parse, Value, InferTree, ..
         } = self.unique_names;
-
-        let start_sym = self.grammar.start_sym().usize();
 
         quote! {
             struct #Parse<'g, I> where I: #InferTree<'g> + 'g {
@@ -775,58 +820,57 @@ impl GenParser {
         }
     }
 
-    pub fn translate_parse_builder(&self) -> rs::TokenStream {
+    pub fn translate_parse_builder(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         let UniqueNames {
             ValueInfer, InferTreeVal, Parse, ParseFactory, lower_layer_macro, ..
         } = self.unique_names;
 
         let traversal = quote! { traversal};
         let store = quote! { store};
-        let closure = self.translate_closure(traversal, store);
+        let closure = self.translate_closure(cx, traversal, store);
         let infer_wildcards = iter::repeat(quote! { _ })
                               .take(self.infer.len());
 
         quote! {
             // ########### QUOTED CODE #########################
+            let closure = |mut parse| {
+                {
+                    // Partially guide the inference of the argument's type.
+                    let _: &#Parse<
+                        #InferTreeVal<_, #ValueInfer<_, #(#infer_wildcards),*>>
+                    > = &*#lower_layer_macro!(@get parse);
+                };
+                let &mut #Parse {
+                    ref mut traversal,
+                    ref store,
+                    finished_node,
+                    ref mut result,
+                    ..
+                } = &mut *#lower_layer_macro!(@get parse);
+                let root = finished_node.unwrap();
+                // ===
+                #closure
+                // ===
+                *result = match root.values().unwrap();
+            };
             #lower_layer_macro!(@builder
                 @factory [#ParseFactory::new()]
-                @closure [|mut parse| {
-                    {
-                        // Partially guide the inference of the argument's type.
-                        let _: &#Parse<
-                            #InferTreeVal<_, #ValueInfer<_, #(#infer_wildcards),*>>
-                        > = &*#lower_layer_macro!(@get parse);
-                    };
-                    let &mut #Parse {
-                        ref mut traversal,
-                        ref store,
-                        finished_node,
-                        ref mut result,
-                        ..
-                    } = &mut *#lower_layer_macro!(@get parse);
-                    let root = finished_node.unwrap();
-                    // ===
-                    #closure
-                    // ===
-                    *result = match root.get() {
-                        Evaluated { values } => values.iter(),
-                        _ => unreachable!()
-                    };
-                }])
+                @closure [closure]
+            )
             // ########### END QUOTED CODE
         }
     }
 
-    pub fn translate_layer_macro_def(&self, arguments_from_outer_layer: &GenArgumentsFromOuterLayer) -> rs::TokenStream {
+    pub fn translate_layer_macro_def(&self, cx: &mut rs::ExtCtxt, arguments_from_outer_layer: &GenArgumentsFromOuterLayer) -> rs::Tokens {
         let UniqueNames {
             UpperValue, Value, Layer, UpperTerminalAccessor, ValueInfer, InferTreeVal,
             layer_macro, lower_layer_macro, ..
         } = self.unique_names;
-        let dol: rs::TokenTree = rs::Punct::new('$', rs::Spacing::Alone).into();
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         // cannot put these in variables, because that would cause a compilation error.
         let traversal = quote! { #lower_layer_macro!(@get #dol parse).traversal};
         let store = quote! { #lower_layer_macro!(@get #dol parse).store};
-        let closure = self.translate_closure(traversal, store);
+        let closure = self.translate_closure(cx, traversal, store);
         // Terminals and their variants
         let &GenArgumentsFromOuterLayer {
             ref terminal_names,
@@ -839,8 +883,6 @@ impl GenParser {
         // Wildcards
         let infer_wildcards = iter::repeat(quote! { _ })
                               .take(self.infer.len());
-        let ValueRep = iter::repeat(Value);
-        let UpperValueRep = iter::repeat(UpperValue);
         quote! {
             macro_rules! #layer_macro {
                 (
@@ -871,12 +913,12 @@ impl GenParser {
                         if sym == upper_terminals.#terminal_names() {
                             for value in result {
                                 let inner =
-                                if let #ValueRep::#terminal_variants(inner) = value.clone() {
+                                if let #Value::#terminal_variants(inner) = value.clone() {
                                     inner
                                 } else {
                                     unreachable!()
                                 };
-                                upper_builder.push(#UpperValueRep::#terminal_bare_variants(inner));
+                                upper_builder.push(#UpperValue::#terminal_bare_variants(inner));
                             }
                         }
                     )else*
@@ -899,9 +941,10 @@ impl GenParser {
 
     pub fn translate_closure(
         &self,
-        traversal: rs::TokenStream,
-        store: rs::TokenStream)
-        -> rs::TokenStream
+        cx: &mut rs::ExtCtxt,
+        traversal: Vec<rs::TokenTree>,
+        store: Vec<rs::TokenTree>)
+        -> rs::Tokens
     {
         let action_id = self.rules.iter().map(|r| &r.id);
         let rule_variant = self.rules.iter().map(|r| &r.variant);
@@ -921,9 +964,7 @@ impl GenParser {
         let null_variant = self.epsilon_actions.roots.iter().map(|root| root.variant_name);
 
         let UniqueNames { Value, lower_layer_macro, .. } = self.unique_names;
-        let ValueRep = iter::repeat(Value);
-        let ValueRep_ = iter::repeat(Value);
-        let ValueRepRep = iter::repeat(iter::repeat(Value));
+        let Value_ = Value;
 
         quote! {
             // ########### QUOTED CODE #########################
@@ -952,7 +993,7 @@ impl GenParser {
                                         #null_symbol_id => {
                                             _builder.reserve(#null_num_summands);
                                             #null_sym_name!(|result| {
-                                                _builder.push(#ValueRep::#null_variant(result));
+                                                _builder.push(#Value::#null_variant(result));
                                             });
                                         }
                                     )*
@@ -983,8 +1024,8 @@ impl GenParser {
                                             // `true` is to avoid irrefutable patterns
                                             let val = (true, #(args[#arg_num].clone(),)*);
                                             if let (true,
-                                                    #(#ValueRepRep::#arg_variant(#arg_pat),)*) = val {
-                                                #ValueRep::#rule_variant(#rules_expr)
+                                                    #(#Value::#arg_variant(#arg_pat),)*) = val {
+                                                #Value_::#rule_variant(#rules_expr)
                                             } else {
                                                 unreachable!()
                                             }
@@ -995,13 +1036,13 @@ impl GenParser {
                                             let seq_vec = args.iter().map(|arg| {
                                                 let val = (true, (*arg).clone());
                                                 if let (true,
-                                                        #ValueRep::#seq_element_variant(elem)) = val {
+                                                        #Value::#seq_element_variant(elem)) = val {
                                                     elem
                                                 } else {
                                                     unreachable!()
                                                 }
                                             }).collect::<Vec<_>>();
-                                            #ValueRep_::#seq_variant(seq_vec)
+                                            #Value_::#seq_variant(seq_vec)
                                         }
                                     )*
                                     _ => unreachable!("rule id {}", alt.action())
@@ -1021,19 +1062,19 @@ impl GenParser {
         }
     }
 
-    pub fn translate_lexer_def(&self) -> rs::TokenStream {
+    pub fn translate_lexer_def(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         // Conditionally compile
         let item = if self.inner_layer.is_none() {
-            self.translate_identity()
+            self.translate_identity(cx)
         } else {
-            self.translate_lexer_invocation()
+            self.translate_lexer_invocation(cx)
         };
         item
     }
 
-    fn translate_identity(&self) -> rs::TokenStream {
+    fn translate_identity(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
         let UniqueNames { lower_layer_macro, .. } = self.unique_names;
-        let dol: rs::TokenTree = rs::Punct::new('$', rs::Spacing::Alone).into();
+        let dol = rs::TokenTree::Token(rs::DUMMY_SP, rs::Token::Dollar);
         // The inner layer is missing. Put placeholding definitions in the inner layer.
         // - How will the parse builder work with an identity layer?
         // - I think it won't. The main parse builder will be Identity.
@@ -1052,21 +1093,31 @@ impl GenParser {
         }
     }
 
-    fn translate_lexer_invocation(&self) -> rs::TokenStream {
+    fn translate_lexer_invocation(&self, cx: &mut rs::ExtCtxt) -> rs::Tokens {
+        // Creates a literal as a Rust token from a char value.
+        fn to_char_literal(num: char) -> rs::TokenTree {
+            rs::TokenTree::Token(
+                rs::DUMMY_SP,
+                rs::Token::Literal(
+                    rs::token::Char(rs::Symbol::gensym(&*num.to_string())),
+                    None
+                )
+            )
+        }
         // Prepend an attribute.
         // Pass this parser's terminal names to this parser's lexer.
-        let lexer_attr = rs::Ident::new(&*format!("lexer_{}", self.inner_layer_level), rs::Span::call_site());
+        let lexer_attr = format!("lexer_{}", self.inner_layer_level).to_ident();
         let terminal_names = self.terminal_names.iter();
         // Get the invocation.
         let invoc = self.inner_layer.as_ref().unwrap();
         let &GenInvocationOfInnerLayer { lexer_name, ref lexer_tts, .. } = invoc;
         // Turn implicit string rules into iterators.
         let str_lhs = invoc.str_lhs.iter();
-        let str_rhs_exprs = invoc.str_rhs.iter().map(|rhs| rs::Literal::string(&*rhs.to_string()));
+        let str_rhs_exprs = invoc.str_rhs.iter().map(|rhs| self.builder.expr().str(rhs));
         // Char ranges. Only present with implicit char_classifier.
         let char_range_lhs = invoc.char_range_lhs.iter();
-        let start = invoc.char_ranges.iter().map(|range| range.start).map(rs::Literal::character);
-        let end = invoc.char_ranges.iter().map(|range| range.end).map(rs::Literal::character);
+        let start = invoc.char_ranges.iter().map(|range| range.start).map(to_char_literal);
+        let end = invoc.char_ranges.iter().map(|range| range.end).map(to_char_literal);
         // The lexer invocation.
         quote! {
             // ########### QUOTED CODE #########################

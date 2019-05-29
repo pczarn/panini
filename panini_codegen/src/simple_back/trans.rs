@@ -12,8 +12,6 @@ use std::fmt::Write;
 use std::u32;
 use std::mem;
 
-use quote::ToTokens;
-
 use cfg::symbol::Symbol;
 use cfg::ContextFreeRef;
 use cfg::remap::Mapping;
@@ -70,7 +68,7 @@ struct ComputedType {
     ty: GenType,
     // Automatic item definitions for AST representation needed by the current
     // type.
-    item_defs: Vec<rs::TokenStream>,
+    item_def: Vec<rs::P<rs::Item>>,
     // Whether this type contains omitted types that will be inferred.
     has_inference: bool,
 }
@@ -106,10 +104,12 @@ impl IrTranslator {
 
         assert_eq!(self.variant_names.len(), self.type_map.len());
 
+        let builder = self.builder;
+
         self.variant_map.extend(
             self.variant_names.iter().zip(self.type_map.iter()).map(|((sym1, name), (sym2, ty))| {
-                assert_eq!(sym1, sym2);
-                (*name, ty.generate())
+                assert_eq!(sym1.as_str(), sym2.as_str());
+                (*name, ty.generate(builder))
             })
         );
     }
@@ -154,13 +154,13 @@ impl IrTranslator {
     fn compute_type_equality_assertions(&mut self) {
         let assert_type_equality = mem::replace(&mut self.ir.assert_type_equality, vec![]);
         let assert_type_equality = assert_type_equality.into_iter().filter_map(|(sym, ty)| {
-            if let Ty::Infer = ty {
+            if ty == Ty::Infer {
                 None
             } else {
                 let computed = self.try_compute_type(sym, &ty).expect("type not computed yet");
                 Some((
-                    self.type_map[&sym].generate(),
-                    computed.ty.generate()
+                    self.type_map[&sym].generate(self.builder),
+                    computed.ty.generate(self.builder)
                 ))
             }
         }).collect::<Vec<_>>();
@@ -213,7 +213,7 @@ impl IrTranslator {
                 };
                 ComputedType {
                     ty: ty,
-                    item_defs: vec![],
+                    item_def: vec![],
                     has_inference: fields.iter().any(|sym| self.type_with_inference.contains(sym)),
                 }
             }
@@ -234,6 +234,7 @@ impl IrTranslator {
                         quote! {}
                     )
                 };
+                let ty = ty.generate();
                 let member_defs = members.iter().map(|(&name, &sym)| {
                     let ty = self.type_map[&sym].generate();
                     quote! { #name: #ty }
@@ -256,30 +257,30 @@ impl IrTranslator {
                 };
                 ComputedType {
                     ty: ty,
-                    item_defs: vec![item_defs],
+                    item_defs: item_defs,
                     has_inference: has_inference,
                 }
             }
             &Ty::RustTy(ref rust_ty) => {
                 ComputedType {
                     ty: GenType::RustTy(rust_ty.clone()),
-                    item_defs: vec![],
+                    item_def: vec![],
                     has_inference: false,
                 }
             }
             &Ty::SequenceVec(rhs_sym) => {
                 ComputedType {
                     ty: GenType::Vec(Box::new(self.type_map[&rhs_sym].clone())),
-                    item_defs: vec![],
+                    item_def: vec![],
                     has_inference: self.type_with_inference.contains(&rhs_sym),
                 }
             }
             &Ty::Infer => {
-                let identifier = rs::Ident::new(&*format!("V{}", self.infer.len()), rs::Span::call_site());
-                self.infer.push(identifier);
+                let identifier = format!("V{}", self.infer.len());
+                self.infer.push(self.builder.id(&identifier));
                 ComputedType {
-                    ty: GenType::Infer(identifier),
-                    item_defs: vec![],
+                    ty: GenType::Infer(identifier.to_ident()),
+                    item_def: vec![],
                     has_inference: true,
                 }
             }
@@ -288,7 +289,7 @@ impl IrTranslator {
 
     fn insert_type(&mut self, nonterminal: Symbol, comp_type: ComputedType) {
         self.type_map.insert(nonterminal, comp_type.ty);
-        self.item_definitions.extend(comp_type.item_defs);
+        self.item_definitions.extend(comp_type.item_def);
         if comp_type.has_inference {
             self.type_with_inference.insert(nonterminal);
         }
@@ -305,7 +306,7 @@ impl IrTranslator {
                 Some(name.0)
             };
             let capitalized = self.capitalized_name(&name.as_str()[..], opt_id);
-            (external_sym, rs::Ident::new(&capitalized[..], rs::Span::call_site()))
+            (external_sym, rs::Ident::from_str(&capitalized[..]))
         }).collect();
     }
 
@@ -333,8 +334,8 @@ impl IrTranslator {
 
         let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
             self.ir.grammar.clone(),
-            &Mapping::new(0),
-            &self.ir.nulling_grammar,
+            Mapping::new(0),
+            self.ir.nulling_grammar.clone(),
         );
 
         let mut processed_rule = vec![];
@@ -361,7 +362,7 @@ impl IrTranslator {
             // The basic rule's lhs is often equal to the processed rule's rhs.
             // They are not equal for precedenced rules, due to their rewrite.
             // We should use the basic rule's lhs. (It is already external.)
-            let rule_lhs = basic_rule.lhs.elem;
+            let rule_lhs = basic_rule.lhs.node;
             let variant = self.variant_names[&rule_lhs];
 
             // Diverge on sequence rules
@@ -373,7 +374,7 @@ impl IrTranslator {
                     args: patterns
                 });
             } else {
-                let elem_variant = self.variant_names[&basic_rule.rhs[0].elem];
+                let elem_variant = self.variant_names[&basic_rule.rhs[0].node];
                 processed_sequences.push(GenSequence {
                     id: origin as u32,
                     variant: variant,
@@ -389,7 +390,7 @@ impl IrTranslator {
             self.ir.internalize(terminal).unwrap().usize()
         }).collect();
 
-        let start = self.ir.grammar.start();
+        let start = self.ir.grammar.get_start();
         let external_start = self.ir.externalize(start);
 
         let start_variant = self.variant_names[&external_start];
@@ -405,10 +406,10 @@ impl IrTranslator {
                 self.ir.name_of_external(sym).unwrap().to_ident()
             }).collect();
             let terminal_variants = arg.terminals().iter().map(|&sym| {
-                self.variant_names[&sym]
+                self.variant_names[&sym].as_str()
             }).collect::<Vec<_>>();
             let terminal_bare_variants = terminal_variants.iter().map(|name| {
-                rs::Ident::new(&name[.. name.rfind("_").unwrap()], rs::Span::call_site())
+                (&name[.. name.rfind("_").unwrap()]).to_ident()
             }).collect();
             GenArgumentsFromOuterLayer {
                 terminal_names: terminal_names,
@@ -420,10 +421,10 @@ impl IrTranslator {
         let inner_layer = match &self.ir.invocation_of_inner_layer {
             &InvocationOfInnerLayer::Invoke { ref lexer_invocation, ref embedded_strings } => {
                 Some(GenInvocationOfInnerLayer {
-                    lexer_name: lexer_invocation.name(),
+                    lexer_name: lexer_invocation.name().to_ident(),
                     lexer_tts: lexer_invocation.tts(),
                     str_lhs: embedded_strings.iter().map(|embed| {
-                        self.ir.name_of_external(embed.symbol.elem).unwrap().to_ident()
+                        self.ir.name_of_external(embed.symbol.node).unwrap().to_ident()
                     }).collect(),
                     str_rhs: embedded_strings.iter().map(|embed| {
                         embed.string.node
@@ -434,8 +435,8 @@ impl IrTranslator {
             }
             &InvocationOfInnerLayer::CharClassifier(ref char_ranges) => {
                 Some(GenInvocationOfInnerLayer {
-                    lexer_name: rs::Ident::new(CHAR_CLASSIFIER_MACRO_NAME, rs::Span::call_site()),
-                    lexer_tts: rs::TokenStream::new(),
+                    lexer_name: CHAR_CLASSIFIER_MACRO_NAME.to_ident(),
+                    lexer_tts: vec![],
                     str_lhs: vec![],
                     str_rhs: vec![],
                     char_range_lhs: char_ranges.iter().map(|&(_, sym)| {
@@ -503,13 +504,15 @@ impl IrTranslator {
             infer: self.infer.clone(),
 
             unique_names: self.unique_names,
+
+            builder: self.builder,
         }
     }
 
     fn get_action(
         &self,
         origin: usize)
-        -> Option<(rs::TokenStream, Vec<GenArg>)>
+        -> Option<(rs::P<rs::Expr>, Vec<GenArg>)>
     {
         let basic_rule = &self.ir.basic_rules[origin];
         let mut patterns = vec![];
@@ -518,7 +521,7 @@ impl IrTranslator {
             &Action::Struct { ref deep_binds, ref shallow_binds, ref expr } => {
                 if !deep_binds.is_empty() {
                     for &rhs_pos in deep_binds {
-                        let rhs_sym = basic_rule.rhs[rhs_pos].elem;
+                        let rhs_sym = basic_rule.rhs[rhs_pos].node;
                         let variant = self.variant_names[&rhs_sym];
                         let pat = self.get_auto_pattern(rhs_sym).expect("auto pattern not found");
                         patterns.push(GenArg {
@@ -531,8 +534,7 @@ impl IrTranslator {
                     for &(rhs_pos, ident) in shallow_binds {
                         let rhs_sym = basic_rule.rhs[rhs_pos].node;
                         let variant = self.variant_names[&rhs_sym];
-                        let pat = ident.into_token_stream();
-
+                        let pat = self.builder.pat().id(ident);
                         patterns.push(GenArg {
                             num: rhs_pos,
                             variant: variant,
@@ -553,11 +555,11 @@ impl IrTranslator {
             &Action::Tuple { ref tuple_binds } => {
                 let idents: Vec<_>;
                 idents = tuple_binds.iter().map(|&pos| {
-                    rs::Ident::new(format!("arg{}", pos), rs::Span::call_site())
+                    self.builder.id(format!("arg{}", pos))
                 }).collect();
                 patterns = tuple_binds.iter().zip(idents.iter()).map(|(&pos, &ident)| {
                     let variant = self.variant_names[&basic_rule.rhs[pos].node];
-                    let pat = ident.into_token_stream();
+                    let pat = self.builder.pat().id(ident);
                     GenArg {
                         num: pos,
                         variant: variant,
@@ -569,7 +571,8 @@ impl IrTranslator {
                         quote! { () }
                     }
                     1 => {
-                        idents[0].into_token_stream()
+
+                        self.builder.expr().id(idents[0])
                     }
                     _ => {
                         quote! { ( #(#idents),* ) }
@@ -583,35 +586,33 @@ impl IrTranslator {
         Some((rust_expr, patterns))
     }
 
-    fn get_auto_expr(&self, nonterminal: Symbol) -> rs::TokenStream {
+    fn get_auto_expr(&self, nonterminal: Symbol) -> rs::P<rs::Expr> {
         match &self.ir.type_map[&nonterminal] {
             &Ty::Auto(AutoTy::Struct { ref members }) => {
-                let name = self.variant_names[&nonterminal];
-                let members2 = members;
-                quote! {
-                    #name {
-                        #(#members: #members2),*
-                    }
-                }
+                self.builder.expr().struct_id(self.variant_names[&nonterminal]).with_id_exprs(
+                    members.iter().map(|(id, _)| {
+                        (*id, self.builder.expr().id(id))
+                    })
+                ).build()
             }
             _ => unreachable!()
         }
     }
 
-    fn get_auto_pattern(&self, nonterminal: Symbol) -> Option<rs::TokenStream> {
+    fn get_auto_pattern(&self, nonterminal: Symbol) -> Option<rs::P<rs::Pat>> {
         match &self.ir.type_map[&nonterminal] {
             &Ty::Auto(AutoTy::Struct { ref members }) => {
                 let name = self.variant_names[&nonterminal];
-                let mut pats = vec![];
+                let mut builder = self.builder.pat().struct_().id(name).build();
                 for (&id, &sym) in members {
                     // Recursion
                     if let Some(pat) = self.get_auto_pattern(sym) {
-                        pats.push(quote! { #id: #pat });
+                        builder = builder.pat(id).build(pat);
                     } else {
-                        pats.push(quote! { #id });
+                        builder = builder.id(id);
                     }
                 }
-                Some(quote! { #name { #(),* } })
+                Some(builder.build())
             }
             _ => {
                 None
@@ -639,7 +640,7 @@ impl IrTranslator {
         // Here, the name must start with "_" so that we don't get "unnecessary mut"
         // warnings later on. Yes, underscore prefix works for ignoring more than just
         // "unused variable" warnings.
-        let continuation_label = rs::gensym("_cont");
+        let continuation_label = rs::Symbol::gensym("_cont");
         for rule in self.ir.nulling_grammar.rules() {
             if rule.rhs().len() == 0 {
                 // Can `origin` be None? In sequences? No.
@@ -655,11 +656,14 @@ impl IrTranslator {
                     }
                     // A sequence rule.
                     Some(&Action::Sequence) => {
-                        quote! { Vec::new() }
+                        self.builder.expr().call().path().ids(&["Vec", "new"]).build().build()
                     }
                     _ => unreachable!("found unknown action")
                 };
-                let inner = quote! { #continuation_label(#action_expr) };
+                let inner = self.builder.block()
+                        .stmt().expr().call().id(continuation_label).with_arg(action_expr)
+                        .build()
+                    .build();
                 null_rules[rule.lhs().usize()].push(inner);
                 null_num[rule.lhs().usize()] += 1;
                 if null_order[rule.lhs().usize()] > null_num_rules {
@@ -775,10 +779,10 @@ impl IrTranslator {
         }
     }
 
-    fn lowercase_name(&self, sym: Symbol) -> rs::Ident {
+    fn lowercase_name(&self, sym: Symbol) -> rs::ast::Ident {
         let rs_name = self.ir.name_of_external(sym).unwrap();
         let mut name = rs_name.as_str().to_string();
         write!(name, "_{}", rs_name.0).unwrap();
-        rs::gensym(&name[..])
+        rs::Symbol::gensym(&name[..])
     }
 }

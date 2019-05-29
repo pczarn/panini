@@ -1,6 +1,6 @@
 use std::hash::Hash;
 
-use cfg::Symbol;
+use cfg::{Symbol, ContextFree};
 use gearley::grammar::Grammar;
 
 use rs;
@@ -14,7 +14,7 @@ pub enum Rule<S = Symbol> {
         rhs: Vec<rs::Spanned<S>>,
         tuple_binds: Vec<usize>,
         deep_binds: Vec<usize>,
-        shallow_binds: Vec<(usize, rs::ast::Ident)>,
+        shallow_binds: Vec<(usize, rs::Ident)>,
         action: ActionExpr,
         source_origin: SourceOrigin,
     },
@@ -42,7 +42,7 @@ pub struct PrecedencedRuleAlternative<S> {
     pub rhs: Vec<rs::Spanned<S>>,
     pub tuple_binds: Vec<usize>,
     pub deep_binds: Vec<usize>,
-    pub shallow_binds: Vec<(usize, rs::ast::Ident)>,
+    pub shallow_binds: Vec<(usize, rs::Ident)>,
     pub action: ActionExpr,
     pub source_origin: SourceOrigin,
 }

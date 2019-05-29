@@ -11,6 +11,8 @@ extern crate gearley;
 extern crate ref_slice;
 // Parsers have code that uses arenas.
 extern crate typed_arena;
+// Parsers have code that deserializes grammars.
+extern crate serde_cbor;
 
 // Run-time tracing.
 mod trace;
@@ -52,3 +54,5 @@ pub use ref_slice::ref_slice;
 pub type TraversalUnordered<'g, T, V> = Traversal<'g, 'g, 'g, T, V, NullOrder<'g, 'g, T, V>>;
 // Run-time tracing in this crate.
 pub use self::trace::{TraceInfo, RuleSource, print_trace};
+
+pub use serde_cbor::from_slice as serde_cbor_from_slice;

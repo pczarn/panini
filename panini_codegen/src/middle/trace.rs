@@ -12,7 +12,7 @@ pub struct Trace {
 
 #[derive(Debug)]
 pub struct TraceStmt {
-    pub lhs: rs::Name,
+    pub lhs: rs::Ident,
     pub rhs: Vec<TraceToken>,
 }
 
@@ -24,8 +24,8 @@ pub struct SourceOrigin {
 
 #[derive(Debug)]
 pub enum TraceToken {
-    Name(rs::Name),
-    String(rs::Name),
+    Name(rs::Ident),
+    String(String),
     LParen,
     RParen,
     Star,
@@ -67,7 +67,7 @@ impl Trace {
     }
 
 
-    fn transform_rhs(&mut self, lhs: rs::Name, rhs: &Rhs) {
+    fn transform_rhs(&mut self, lhs: rs::Ident, rhs: &Rhs) {
         let mut visitor = TraceRhs::new();
         visitor.visit_rhs(rhs);
         self.stmts.push(TraceStmt {

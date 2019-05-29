@@ -267,7 +267,7 @@ struct FlatRule {
     // Indexes are RHS positions.
     tuple_binds: Vec<usize>,
     deep_binds: Vec<usize>,
-    shallow_binds: Vec<(usize, rs::ast::Ident)>,
+    shallow_binds: Vec<(usize, rs::Ident)>,
     auto_ty: AutoTy<rs::Name>,
     source_origin: SourceOrigin,
 }
@@ -338,8 +338,8 @@ impl RhsAstVisitor for FlattenRhsAst {
 
     fn visit_sequence(&mut self, sequence: &ast::Sequence) {
         // TODO prevent duplication of identical sequences
-        let rule_lhs = rs::dummy_spanned(rs::Name::gensym("G"));
-        let seq_lhs = rs::dummy_spanned(rs::Name::gensym("G"));
+        let rule_lhs = rs::dummy_spanned(rs::gensym("G"));
+        let seq_lhs = rs::dummy_spanned(rs::gensym("G"));
         // The inner rule goes to `rule_stack`.
         // Walk through `sequence.rhs`, collecting the contents to `rule_lhs ::= ...`.
         let older_rule_pos = self.cur_rule_pos;

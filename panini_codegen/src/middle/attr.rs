@@ -9,7 +9,7 @@ use middle::lint::{Lint, Level};
 
 pub struct Attrs<S> {
     arguments_from_outer_layer: Option<ArgumentsFromOuterLayer<S>>,
-    lint_levels: HashMap<rs::InternedString, Level>,
+    lint_levels: HashMap<rs::Ident, Level>,
     pub overruled_lint: Vec<rs::Span>,
     pub invalid_lint: Vec<rs::Span>,
     pub unused_attrs: Vec<rs::Span>,
@@ -23,7 +23,7 @@ pub struct ArgumentsFromOuterLayer<S> {
     terminals: Vec<S>,
 }
 
-impl Attrs<rs::Name> {
+impl Attrs<rs::Ident> {
     pub fn compute(attrs: &[rs::Attribute]) -> Result<Self, TransformationError> {
         let mut lexer_attr = None;
         let mut lint_attrs = vec![];
@@ -44,7 +44,7 @@ impl Attrs<rs::Name> {
 
                 while let Some(tt) = cursor.next() {
                     match cursor.next() {
-                        Some(rs::TokenTree::Token(_, rs::Token::Comma)) | None => {}
+                        Some(rs::TokenTree::Token::Punct(rs::Punct { op: ',', .. })) | None => {}
                         Some(tt) => {
                             lint_attrs.push(Err(tt.span()));
                             continue;
@@ -55,8 +55,8 @@ impl Attrs<rs::Name> {
                         }
                     }
                     match tt {
-                        rs::TokenTree::Token(sp, rs::Token::Ident(ident)) => {
-                            lint_attrs.push(Ok((ident, lint_level, sp)));
+                        rs::TokenTree::Ident(rs::Ident { inner, .. }) => {
+                            lint_attrs.push(Ok((inner, lint_level, rs::Span::call_site())));
                         }
                         _ => {
                             lint_attrs.push(Err(tt.span()));
@@ -75,12 +75,12 @@ impl Attrs<rs::Name> {
 
             while let Some(tt) = cursor.next() {
                 match cursor.next() {
-                    Some(rs::TokenTree::Token(_, rs::Token::Comma)) | None => {}
+                    Some(rs::TokenTree::Punct(rs::Punct { op: ',', .. })) | None => {}
                     tt => unreachable!()
                 }
                 match tt {
-                    rs::TokenTree::Token(sp, rs::Token::Ident(ident)) => {
-                        terminals.push(ident);
+                    rs::TokenTree::Ident(rs::Ident { inner, .. }) => {
+                        terminals.push(inner);
                     }
                     _ => unreachable!()
                 }

@@ -14,12 +14,13 @@ name = "panini_codegen"
 [dependencies]
 log = "0.3"
 env_logger = "0.3"
-quote = "0.3"
-proc-macro2 = "0.1"
+quote = { path = "../../quote/" }
+proc-macro2 = { path = "../../proc-macro2/" }
 bit-matrix = "0.2"
 cfg = "0.3"
 cfg-regex = "0.0"
 gearley = "0.0"
+serde_cbor = "0.9"
 
 [dev-dependencies]
 maplit = "0.1"

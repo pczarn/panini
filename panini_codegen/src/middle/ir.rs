@@ -218,7 +218,7 @@ impl IrStmtsAndAttrs {
                         )]
                     ],
                     ty: None,
-                    span: rs::DUMMY_SP,
+                    span: rs::Span::call_site(),
                 };
                 stmts.stmts.push(lower_start_stmt);
             }

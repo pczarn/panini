@@ -9,7 +9,7 @@ pub enum Action {
     },
     Struct {
         deep_binds: Vec<usize>,
-        shallow_binds: Vec<(usize, rs::ast::Ident)>,
+        shallow_binds: Vec<(usize, rs::Ident)>,
         expr: ActionExpr,
     },
     Sequence,
@@ -21,7 +21,7 @@ pub enum ActionExpr {
     Auto,
     // Action
     Inline {
-        expr: rs::P<rs::Expr>,
+        expr: rs::TokenStream,
     },
 }
 
@@ -51,7 +51,7 @@ impl Action {
 
 pub enum DirectlyBoundPositions<'a> {
     List(slice::Iter<'a, usize>),
-    Chain(slice::Iter<'a, usize>, slice::Iter<'a, (usize, rs::ast::Ident)>),
+    Chain(slice::Iter<'a, usize>, slice::Iter<'a, (usize, rs::Ident)>),
 }
 
 impl<'a> Iterator for DirectlyBoundPositions<'a> {
