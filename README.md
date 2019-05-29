@@ -39,21 +39,30 @@ The following libraries were created for Panini.
 
 ### Related work
 
+#### In Rust
+
+* [LALRPOP](https://github.com/nikomatsakis/lalrpop) — a LR(1) parser generator focused on ease of use.
+* [rust-lang's GLL](https://github.com/rust-lang/gll/) — a parsing framework.
+  * [grammer with an E](https://github.com/lykenware/grammer/) — a grammar framework.
+* [Oak](https://github.com/ptal/oak/) — a PEG parser generator with typed expressions.
+
+#### In other languages
+
 * [Marpa](https://jeffreykegler.github.io/Marpa-web-site/) — an Earley parser (not a generator)
-  that has advanced features. Written in C and Perl.
+  that has advanced features. Written in literate C and in Perl.
 * [YAEP](https://github.com/vnmakarov/yaep) — an Earley parser engine that currently has
   the best speed and small memory use. Written in C.
-* [Oak](https://github.com/ptal/oak/) — a PEG parser generator with typed expressions.
-  Written in Rust.
-* [LALRPOP](https://github.com/nikomatsakis/lalrpop) — a LR(1) parser generator focused on ease of use.
-  Written in Rust.
+
+#### In academia
+
 * OMeta — a PEG parser with advanced features that go beyond parsing.
+* [SPPF-Style Parsing From Earley Recognisers](https://www.researchgate.net/publication/220367479_SPPF-Style_Parsing_From_Earley_Recognisers) — Elizabeth Scott.
+
+### Quotes
 
 > I'd be very happy to have a superfast general parser out there but some extremely bright minds have been unable to solve it for 40 years.
 
-- Terence Parr
-
-Well, it's somewhat solved now.
+ — Terence Parr, author of ANTLR
 
 ### License
 
