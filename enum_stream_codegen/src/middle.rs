@@ -1,7 +1,7 @@
 use rs;
 use front;
 
-pub type Name = rs::Name;
+pub type Name = rs::Ident;
 
 pub struct Ir {
     pub rules: Vec<Rule>,
@@ -10,9 +10,9 @@ pub struct Ir {
 
 pub struct Rule {
     pub name: Name,
-    pub negative: Vec<rs::P<rs::Pat>>,
-    pub positive: Vec<rs::P<rs::Pat>>,
-    pub guard: Option<rs::P<rs::Expr>>,
+    pub negative: Vec<rs::Pat>,
+    pub positive: Vec<rs::Pat>,
+    pub guard: Option<rs::Expr>,
 }
 
 impl Ir {
@@ -35,7 +35,7 @@ pub fn transform(stmts: front::Stmts) -> Result<Ir, ()> {
             v.push(elem.pattern)
         }
         ir.rules.push(Rule {
-            name: stmt.name,
+            name: stmt.ident,
             positive: positive,
             negative: negative,
             guard: stmt.rhs.guard,

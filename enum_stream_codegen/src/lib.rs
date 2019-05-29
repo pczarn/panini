@@ -1,8 +1,9 @@
 #![feature(plugin, rustc_private)]
-#![plugin(quasi_macros)]
 
 #![allow(unused_imports)]
 #![allow(unused_variables)]
+
+#![recursion_limit = "256"]
 
 #[macro_use]
 extern crate log;
@@ -12,14 +13,15 @@ extern crate rustc;
 extern crate rustc_plugin;
 extern crate syntax;
 
-extern crate aster;
-extern crate quasi;
+extern crate quote;
 
-extern crate panini_codegen;
+extern crate enum_coder;
+extern crate panini_common;
 
 pub mod front;
-pub mod middle;
-pub mod back;
+
+mod middle;
+mod back;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
@@ -27,28 +29,19 @@ use std::iter::{self, Iterator};
 use std::rc::Rc;
 use std::mem;
 
-use aster::expr::ExprBuilder;
-
-pub use panini_codegen::rs;
+use panini_common::rs;
 
 use front::Stmts;
 
-pub fn codegen<'cx>(ecx: &'cx mut rs::ExtCtxt,
-                       sp: rs::Span,
-                       stmts: Stmts) -> Box<rs::MacResult + 'cx> {
-    match middle::transform(stmts) {
-        Ok(ir) => {
-            let items = back::IrTranslator::new(ir).translate(ecx);
-            // Log the generated code.
-            let _ = env_logger::init();
+fn log(code: &rs::TokenStream) {
+    let _ = env_logger::init();
+    info!("{}", code);
+}
 
-            let mut whole_str = String::new();
-            for item in &items {
-                whole_str.push_str(&rs::pprust::stmt_to_string(item)[..]);
-            }
-            info!("{}", whole_str);
-            rs::MacEager::stmts(rs::SmallVector::many(items))
-        },
-        Err(error) => rs::DummyResult::any(rs::DUMMY_SP),
-    }
+pub fn codegen(stmts: Stmts) -> rs::TokenStream {
+    let ir = middle::transform(stmts).unwrap();
+    let instructions = back::IrTranslator::new(ir).translate();
+    let result = instructions.generate();
+    log(&result);
+    result
 }
