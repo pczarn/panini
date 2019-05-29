@@ -7,12 +7,12 @@ On the surface, the goal of Panini is ease of use. In the future, it
 will also offer advanced features without compromising on the speed.
 
 Panini uses **[gearley](https://github.com/pczarn/gearley)** for Earley parsing,
-which can handle all context-free grammars. If you can write a grammar for a
+which can handle all context-free grammars. If you write a grammar for a
 language, it will work as expected.
 
 ### Syntax and semantics of grammar description
 
-User-friendliness is harder to achieve in a statically typed language.
+User-friendliness is harder to achieve in a statically typed language such as Rust.
 Consequently, Panini offers typed expressions and type inference. Expression
 are typed according to intuitive rules:
 
@@ -28,12 +28,12 @@ are typed according to intuitive rules:
 
 Automatic recursive types are forbidden.
 
-Grammars that have mistakes may cause warnings during compilation. These
-warnings may indicate that certain semantic actions are ignored.
+Grammars that have mistakes in their semantics may cause warnings, but never critical errors,
+during compilation. These warnings may indicate that some semantic actions are ignored.
 
 ### Dependency graph
 
-These libraries were created for Panini.
+The following libraries were created for Panini.
 
 ![Dependency graph](doc/dependency_graph.png)
 
@@ -48,6 +48,12 @@ These libraries were created for Panini.
 * [LALRPOP](https://github.com/nikomatsakis/lalrpop) — a LR(1) parser generator focused on ease of use.
   Written in Rust.
 * OMeta — a PEG parser with advanced features that go beyond parsing.
+
+> I'd be very happy to have a superfast general parser out there but some extremely bright minds have been unable to solve it for 40 years.
+
+- Terence Parr
+
+Well, it's somewhat solved now.
 
 ### License
 
