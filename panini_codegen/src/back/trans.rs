@@ -42,6 +42,12 @@ use back::generate::{
 
 const CHAR_CLASSIFIER_MACRO_NAME: &'static str = "char_classifier";
 
+enum_coder! {
+    enum Instruction {
+        
+    }
+}
+
 pub struct IrTranslator {
     // Intermediate representation (higher-level).
     pub ir: Ir,
