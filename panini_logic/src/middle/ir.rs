@@ -13,8 +13,7 @@ use cfg::usefulness::Usefulness;
 use cfg::*;
 use cfg_regex::{RegexTranslation, ClassRange};
 
-use rs;
-use front::ast;
+use input::ast;
 use middle::{ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy, SymbolicName};
 use middle::error::{TransformationError, CycleWithCauses};
 use middle::trace::{Trace, SourceOrigin};
@@ -321,12 +320,14 @@ impl IrPrepared {
                                 &mut grammar,
                                 &*embedded.string.node.as_str()
                             );
-                            hir.rules.push(Rule::BnfRule {
+                            hir.rules.push(Rule {
                                 lhs: embedded.symbol,
-                                rhs: vec![rs::dummy_spanned(sym2)],
-                                tuple_binds: vec![],
-                                deep_binds: vec![],
-                                shallow_binds: vec![],
+                                properties: RuleProperties {
+                                    rhs: vec![rs::dummy_spanned(sym2)],
+                                    tuple_binds: vec![],
+                                    deep_binds: vec![],
+                                    shallow_binds: vec![],
+                                },
                                 source_origin: embedded.source,
                                 action: ActionExpr::Auto,
                             });
@@ -604,12 +605,12 @@ impl IrMapped {
     }
 
     pub fn transform_from_stmts(stmts: ast::Stmts) -> Result<Self, TransformationError> {
-        let attrs = try!(Attrs::compute(&stmts.attrs[..]));
-        let ir = try!(IrStmtsAndAttrs::compute(stmts, attrs));
-        let ir = try!(IrInitialHir::compute(ir));
+        let attrs = Attrs::compute(&stmts.attrs[..])?;
+        let ir = IrStmtsAndAttrs::compute(stmts, attrs)?;
+        let ir = IrInitialHir::compute(ir)?;
         let ir = IrFinalHir::compute(ir);
         let ir = IrPrepared::compute(ir);
-        let ir = try!(IrBinarized::compute(ir));
+        let ir = IrBinarized::compute(ir)?;
         let ir = IrNormalized::compute(ir);
         let ir = IrProperNormalized::compute(ir);
         IrMapped::compute(ir)

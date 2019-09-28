@@ -16,69 +16,61 @@ use quote::ToTokens;
 
 use cfg::symbol::Symbol;
 use cfg::ContextFreeRef;
-use cfg::remap::Mapping;
+// use cfg::remap::Mapping;
 use cfg::rule::GrammarRule;
 use cfg::rule::container::RuleContainer;
 use cfg::symbol::SymbolBitSet;
-use gearley::grammar::InternalGrammar;
+// use gearley::grammar::InternalGrammar;
 
-use rs;
 use middle::{Ir, Ty, AutoTy};
 use middle::action::{Action, ActionExpr};
-use middle::ir::InvocationOfInnerLayer;
-use back::generate::{
-    GenParser,
-    GenEpsilonActions,
-    GenEpsilonIntermediateRule,
-    GenEpsilonRootAction,
-    GenRule,
-    GenArg,
-    GenSequence,
-    GenType,
-    GenArgumentsFromOuterLayer,
-    GenInvocationOfInnerLayer,
-    UniqueNames,
-};
+// use middle::ir::InvocationOfInnerLayer;
+use output::instruction::{Instruction, translate_ir};
 
 const CHAR_CLASSIFIER_MACRO_NAME: &'static str = "char_classifier";
-
-enum_coder! {
-    enum Instruction {
-        
-    }
-}
 
 pub struct IrTranslator {
     // Intermediate representation (higher-level).
     pub ir: Ir,
 
     // temporary maps
-    pub type_map: BTreeMap<Symbol, GenType>,
-    type_with_inference: HashSet<Symbol>,
-    pub variant_names: BTreeMap<Symbol, rs::Term>,
+    pub type_map: BTreeMap<Symbol, ComputedType>,
+    // pub variant_names: BTreeMap<Symbol, rs::Term>,
 
     // Compile-time assertions.
-    assert_type_equality: Vec<(rs::TokenStream, rs::TokenStream)>,
+    // assert_type_equality: Vec<(rs::TokenStream, rs::TokenStream)>,
     // Terminal symbols.
     pub terminals: Vec<Symbol>,
     // Evaluated node variants with their inner types.
-    pub variant_map: Vec<(rs::Term, rs::TokenStream)>,
-    // Automatic item definitions for AST representation.
-    pub item_definitions: Vec<rs::TokenStream>,
-    // Types omitted by user are inferred.
-    pub infer: Vec<rs::Term>,
-    // Names of generated items
-    unique_names: UniqueNames,
+    // pub variant_map: Vec<(rs::Term, rs::TokenStream)>,
+    pub infer: BTreeMap<Symbol, u32>,
 }
 
-struct ComputedType {
-    // Generated type.
-    ty: GenType,
-    // Automatic item definitions for AST representation needed by the current
-    // type.
-    item_defs: Vec<rs::TokenStream>,
-    // Whether this type contains omitted types that will be inferred.
-    has_inference: bool,
+type ItemDefId = u32;
+type RustTyId = u32;
+
+// Type
+
+#[derive(Clone)]
+pub enum ComputedType {
+    RustTy(RustTyId),
+    Vec {
+        ty: Box<ComputedType>,
+        rhs_sym: Symbol,
+    },
+    Unit,
+    Tuple {
+        types: Vec<ComputedType>,
+        fields: Vec<Symbol>,
+    },
+    Struct {
+        nonterminal: Symbol,
+        fields: Vec<Symbol>,
+    },
+    Infer {
+        nonterminal: Symbol,   
+    },
+    Terminal,
 }
 
 // Creation
@@ -91,14 +83,11 @@ impl IrTranslator {
         let mut this = IrTranslator {
             ir: ir,
             type_map: BTreeMap::new(),
-            variant_names: BTreeMap::new(),
-            variant_map: vec![],
-            item_definitions: vec![],
-            type_with_inference: HashSet::new(),
-            assert_type_equality: vec![],
+            // variant_names: BTreeMap::new(),
+            // variant_map: vec![],
+            // assert_type_equality: vec![],
             infer: vec![],
             terminals: vec![],
-            unique_names: UniqueNames::new(layer_id),
         };
         this.compute_variant_map();
         this
@@ -106,9 +95,10 @@ impl IrTranslator {
 
     fn compute_variant_map(&mut self) {
         self.compute_terminals();
-        self.compute_variant_names();
+        // self.compute_variant_names();
         self.compute_types();
-        self.compute_type_equality_assertions();
+        // self.compute_type_equality_assertions();
+        self.compute_infer();
 
         assert_eq!(self.variant_names.len(), self.type_map.len());
 
@@ -125,27 +115,39 @@ impl IrTranslator {
             // Use external symbols, but translate later.
             let terminal = self.ir.externalize(terminal);
             self.terminals.push(terminal);
-            let ty = quote! { I::T };
-            self.ir.type_map.insert(terminal, Ty::RustTy(ty));
-            self.type_map.insert(terminal, GenType::Terminal);
-            self.type_with_inference.insert(terminal);
+            self.ir.type_map.insert(terminal, Ty::RustTerminalTy);
+            self.type_map.insert(terminal, ComputedType::Terminal);
         }
     }
 
+    // fn compute_variant_names(&mut self) {
+    //     let ir = &self.ir;
+    //     let terminals = &self.terminals;
+    //     self.variant_names = ir.type_map.iter().map(|(&external_sym, _ty)| {
+    //         let name = ir.name_of_external(external_sym).unwrap();
+    //         let opt_id = if terminals.iter().find(|&&sym| sym == external_sym).is_some() {
+    //             None
+    //         } else {
+    //             Some(name.0)
+    //         };
+    //         let capitalized = self.capitalized_name(&name.as_str()[..], opt_id);
+    //         (external_sym, rs::Ident::new(&capitalized[..], rs::Span::call_site()))
+    //     }).collect();
+    // }
+
     fn compute_types(&mut self) {
-        let mut work: Vec<_> = self.ir.type_map.iter().map(|(k, v)| {
-            (k.clone(), v.clone())
-        }).collect();
-        // Work is sorted.
+        let mut work: Vec<_> = self.ir.type_map.iter().filter_map(|(sym, ty)|
+            if ty.is_terminal() {
+                None
+            } else {
+                Some((sym.clone(), ty.clone()))
+            }
+        ).collect();
         while !work.is_empty() {
             let work_len = work.len();
             work.retain(|&(nonterminal, ref ty)| {
-                if self.type_map.contains_key(&nonterminal) {
-                    // This is a terminal, since terminals were already computed.
-                    return false;
-                }
-                if let Some(gen_type) = self.try_compute_type(nonterminal, ty) {
-                    self.insert_type(nonterminal, gen_type);
+                if let Some(computed_type) = self.try_compute_type(nonterminal, ty) {
+                    self.type_map.insert(nonterminal, computed_type);
                     false
                 } else {
                     true
@@ -157,162 +159,136 @@ impl IrTranslator {
         }
     }
 
-    fn compute_type_equality_assertions(&mut self) {
-        let assert_type_equality = mem::replace(&mut self.ir.assert_type_equality, vec![]);
-        let assert_type_equality = assert_type_equality.into_iter().filter_map(|(sym, ty)| {
-            if let Ty::Infer = ty {
-                None
-            } else {
-                let computed = self.try_compute_type(sym, &ty).expect("type not computed yet");
-                Some((
-                    self.type_map[&sym].generate(),
-                    computed.ty.generate()
-                ))
-            }
-        }).collect::<Vec<_>>();
-        self.assert_type_equality.extend(assert_type_equality);
-    }
+    // fn compute_type_equality_assertions(&mut self) {
+    //     let assert_type_equality = mem::replace(&mut self.ir.assert_type_equality, vec![]);
+    //     let assert_type_equality = assert_type_equality.into_iter().filter_map(|(sym, ty)| {
+    //         if let Ty::Infer = ty {
+    //             None
+    //         } else {
+    //             let computed = self.try_compute_type(sym, &ty).expect("type not computed yet");
+    //             Some((
+    //                 self.type_map[&sym].generate(),
+    //                 computed.generate()
+    //             ))
+    //         }
+    //     }).collect::<Vec<_>>();
+    //     self.assert_type_equality.extend(assert_type_equality);
+    // }
 
-    fn type_dependencies<F>(&self, ty: &Ty<Symbol>, f: F) -> bool
-        where F: Fn(Symbol) -> bool
-    {
-        match ty {
-            &Ty::Auto(AutoTy::Tuple { ref fields }) => {
-                fields.iter().all(|&sym| f(sym))
-            }
-            &Ty::Auto(AutoTy::Struct { ref members }) => {
-                members.iter().all(|(_, &sym)| f(sym))
-            }
-            &Ty::SequenceVec(rhs_sym) => {
-                f(rhs_sym)
-            }
-            &Ty::Infer | &Ty::RustTy(_) => {
-                true
+    fn compute_infer(&self) {
+        for (nonterminal, ty) in self.type_map.iter() {
+            match ty {
+                &ComputedType::Infer { nonterminal } => {
+                    let num = self.infer.len();
+                    self.infer.insert(nonterminal, num as u32);
+                }
+                _ => {}
             }
         }
     }
 
+    fn direct_dependencies<F>(&self, ty: &ComputedType) -> Vec<Option<&ComputedType>> {
+        match ty {
+            &ComputedType::Unit
+            | &ComputedType::Infer { .. }
+            | &ComputedType::RustTy(_)
+            | &ComputedType::Terminal => {
+                vec![]
+            }
+            &ComputedType::Tuple { ref fields, .. } | &ComputedType::Struct { ref fields, .. } => {
+                fields.iter().map(|sym| self.type_map.get(sym)).collect()
+            }
+            &ComputedType::Vec { rhs_sym, .. } => {
+                vec![self.type_map.get(rhs_sym)]
+            }
+        }
+    }
+
+    fn transitive_dependencies(&self, ty: &ComputedType) -> Vec<&ComputedType> {
+        let mut dependencies = self.direct_dependencies(ty).into_iter().flat_map(|ty| ty).collect();
+        let mut next_dependencies = vec![];
+        let mut final_dependencies = vec![];
+        while !dependencies.is_empty() {
+            for ty in dependencies.into_iter() {
+                let direct_dependencies = self.direct_dependencies(ty).into_iter().flat_map(|ty| ty).collect();
+                if direct_dependencies.is_empty() {
+                    final_dependencies.push(ty);
+                } else {
+                    next_dependencies.extend(direct_dependencies.into_iter());
+                }
+            }
+            dependencies = next_dependencies;
+        }
+        final_dependencies
+    }
+
     fn try_compute_type(&mut self, nonterminal: Symbol, ty: &Ty<Symbol>) -> Option<ComputedType> {
-        if self.type_dependencies(ty, |sym| self.type_map.contains_key(&sym)) {
-            Some(self.compute_type(nonterminal, ty))
+        let ty = self.compute_type(nonterminal, ty);
+        if self.direct_dependencies(&ty).into_iter().all(|maybe_ty| maybe_ty.is_some()) {
+            Some(ty)
         } else {
             None
         }
     }
 
     fn compute_type(&mut self, nonterminal: Symbol, ty: &Ty<Symbol>) -> ComputedType {
-        // Do not mutate state here, unless `ty` is Infer.
         match ty {
             &Ty::Auto(AutoTy::Tuple { ref fields }) => {
-                let ty = match fields.len() {
+                match fields.len() {
                     0 => {
-                        GenType::Unit
+                        ComputedType::Unit
                     }
                     1 => {
                         self.type_map[&fields[0]].clone()
                     }
                     _ => {
-                        GenType::Tuple(
-                            fields.iter().map(|sym| self.type_map[sym].clone()).collect()
-                        )
+                        ComputedType::Tuple {
+                            types: fields.iter().map(|sym| self.type_map[sym].clone()).collect(),
+                            fields: fields.clone(),
+                        }
                     }
-                };
-                ComputedType {
-                    ty: ty,
-                    item_defs: vec![],
-                    has_inference: fields.iter().any(|sym| self.type_with_inference.contains(sym)),
                 }
             }
             &Ty::Auto(AutoTy::Struct { ref members }) => {
-                let capitalized_name = self.variant_names[&nonterminal];
-                let has_inference = members.iter().any(|(_, sym)|
-                    self.type_with_inference.contains(sym)
-                );
-                let (ty, generics) = if has_inference {
-                    let infer = self.unique_names.Infer;
-                    (
-                        GenType::Item(capitalized_name),
-                        quote! { I: #infer }
-                    )
-                } else {
-                    (
-                        GenType::Identifier(capitalized_name),
-                        quote! {}
-                    )
-                };
-                let member_defs = members.iter().map(|(&name, &sym)| {
-                    let ty = self.type_map[&sym].generate();
-                    quote! { #name: #ty }
-                });
-                let member_clones = members.iter().map(|(&name, _)| {
-                    quote! { #name: #name.clone() }
-                });
-                let item_defs = quote! {
-                    struct #capitalized_name<#generics> {
-                        #(#member_defs)*
-                    }
+                // let capitalized_name = self.variant_names[&nonterminal];
+                ComputedType::Struct {
+                    nonterminal,
+                    fields: members.iter().map(|(_, sym)| sym).collect(),
+                }
+                // let member_defs = members.iter().map(|(&name, &sym)| {
+                //     let ty = self.type_map[&sym].generate();
+                //     quote! { #name: #ty }
+                // });
+                // let member_clones = members.iter().map(|(&name, _)| {
+                //     quote! { #name: #name.clone() }
+                // });
+                // let item_defs = quote! {
+                //     struct #capitalized_name<#generics> {
+                //         #(#member_defs)*
+                //     }
 
-                    impl<#generics> Clone for #capitalized_name {
-                        fn clone(&self) -> #ty {
-                            #capitalized_name {
-                                #(#member_clones)*
-                            }
-                        }
-                    }
-                };
-                ComputedType {
-                    ty: ty,
-                    item_defs: vec![item_defs],
-                    has_inference: has_inference,
-                }
+                //     impl<#generics> Clone for #capitalized_name {
+                //         fn clone(&self) -> #ty {
+                //             #capitalized_name {
+                //                 #(#member_clones)*
+                //             }
+                //         }
+                //     }
+                // };
             }
-            &Ty::RustTy(ref rust_ty) => {
-                ComputedType {
-                    ty: GenType::RustTy(rust_ty.clone()),
-                    item_defs: vec![],
-                    has_inference: false,
-                }
+            &Ty::RustTy(rust_ty_id) => {
+                ComputedType::RustTy(rust_ty_id)
             }
             &Ty::SequenceVec(rhs_sym) => {
-                ComputedType {
-                    ty: GenType::Vec(Box::new(self.type_map[&rhs_sym].clone())),
-                    item_defs: vec![],
-                    has_inference: self.type_with_inference.contains(&rhs_sym),
+                ComputedType::Vec {
+                    ty: Box::new(self.type_map[&rhs_sym].clone()),
+                    rhs_sym,
                 }
             }
             &Ty::Infer => {
-                let identifier = rs::Ident::new(&*format!("V{}", self.infer.len()), rs::Span::call_site());
-                self.infer.push(identifier);
-                ComputedType {
-                    ty: GenType::Infer(identifier),
-                    item_defs: vec![],
-                    has_inference: true,
-                }
+                ComputedType::Infer { nonterminal }
             }
         }
-    }
-
-    fn insert_type(&mut self, nonterminal: Symbol, comp_type: ComputedType) {
-        self.type_map.insert(nonterminal, comp_type.ty);
-        self.item_definitions.extend(comp_type.item_defs);
-        if comp_type.has_inference {
-            self.type_with_inference.insert(nonterminal);
-        }
-    }
-
-    fn compute_variant_names(&mut self) {
-        let ir = &self.ir;
-        let terminals = &self.terminals;
-        self.variant_names = ir.type_map.iter().map(|(&external_sym, _ty)| {
-            let name = ir.name_of_external(external_sym).unwrap();
-            let opt_id = if terminals.iter().find(|&&sym| sym == external_sym).is_some() {
-                None
-            } else {
-                Some(name.0)
-            };
-            let capitalized = self.capitalized_name(&name.as_str()[..], opt_id);
-            (external_sym, rs::Ident::new(&capitalized[..], rs::Span::call_site()))
-        }).collect();
     }
 
     fn capitalized_name(&self, name: &str, opt_id: Option<u32>) -> String {
@@ -334,193 +310,194 @@ impl IrTranslator {
 // * type equality assertions
 
 impl IrTranslator {
-    pub fn generate(&mut self) -> GenParser {
-        let epsilon_actions = self.generate_epsilon_actions();
+    pub fn generate(&mut self) -> Vec<Instruction> {
+        translate_ir(self)
+        // let epsilon_actions = self.generate_epsilon_actions();
 
-        let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
-            self.ir.grammar.clone(),
-            &Mapping::new(0),
-            &self.ir.nulling_grammar,
-        );
+        // let internal_grammar = InternalGrammar::from_processed_grammar_with_maps(
+        //     self.ir.grammar.clone(),
+        //     &Mapping::new(0),
+        //     &self.ir.nulling_grammar,
+        // );
 
-        let mut processed_rule = vec![];
-        let mut processed_sequences = vec![];
+        // let mut processed_rule = vec![];
+        // let mut processed_sequences = vec![];
 
-        let mut seen_origin = HashSet::new();
-        // For generating actions.
-        let external_origins = self.ir.grammar.rules().filter_map(|rule| {
-            if let Some(origin) = rule.history().origin() {
-                if seen_origin.insert(origin) {
-                    Some(origin)
-                } else {
-                    None
-                }
-            } else {
-                // Skip this rule.
-                None
-            }
-        });
+        // let mut seen_origin = HashSet::new();
+        // // For generating actions.
+        // let external_origins = self.ir.grammar.rules().filter_map(|rule| {
+        //     if let Some(origin) = rule.history().origin() {
+        //         if seen_origin.insert(origin) {
+        //             Some(origin)
+        //         } else {
+        //             None
+        //         }
+        //     } else {
+        //         // Skip this rule.
+        //         None
+        //     }
+        // });
 
-        for origin in external_origins {
-            // Get the basic rule.
-            let basic_rule = &self.ir.basic_rules[origin as usize];
-            // The basic rule's lhs is often equal to the processed rule's rhs.
-            // They are not equal for precedenced rules, due to their rewrite.
-            // We should use the basic rule's lhs. (It is already external.)
-            let rule_lhs = basic_rule.lhs.elem;
-            let variant = self.variant_names[&rule_lhs];
+        // for origin in external_origins {
+        //     // Get the basic rule.
+        //     let basic_rule = &self.ir.basic_rules[origin as usize];
+        //     // The basic rule's lhs is often equal to the processed rule's rhs.
+        //     // They are not equal for precedenced rules, due to their rewrite.
+        //     // We should use the basic rule's lhs. (It is already external.)
+        //     let rule_lhs = basic_rule.lhs.elem;
+        //     let variant = self.variant_names[&rule_lhs];
 
-            // Diverge on sequence rules
-            if let Some((rust_expr, patterns)) = self.get_action(origin as usize) {
-                processed_rule.push(GenRule {
-                    id: origin as u32,
-                    variant: variant,
-                    action: rust_expr,
-                    args: patterns
-                });
-            } else {
-                let elem_variant = self.variant_names[&basic_rule.rhs[0].elem];
-                processed_sequences.push(GenSequence {
-                    id: origin as u32,
-                    variant: variant,
-                    elem_variant: elem_variant,
-                });
-            }
-        }
+        //     // Diverge on sequence rules
+        //     if let Some((rust_expr, patterns)) = self.get_action(origin as usize) {
+        //         processed_rule.push(GenRule {
+        //             id: origin as u32,
+        //             variant: variant,
+        //             action: rust_expr,
+        //             args: patterns
+        //         });
+        //     } else {
+        //         let elem_variant = self.variant_names[&basic_rule.rhs[0].elem];
+        //         processed_sequences.push(GenSequence {
+        //             id: origin as u32,
+        //             variant: variant,
+        //             elem_variant: elem_variant,
+        //         });
+        //     }
+        // }
 
-        let terminal_names = self.terminals.iter().map(|&terminal| {
-            self.ir.name_of_external(terminal).unwrap().to_ident()
-        }).collect();
-        let terminal_ids = self.terminals.iter().map(|&terminal| {
-            self.ir.internalize(terminal).unwrap().usize()
-        }).collect();
+        // let terminal_names = self.terminals.iter().map(|&terminal| {
+        //     self.ir.name_of_external(terminal).unwrap().to_ident()
+        // }).collect();
+        // let terminal_ids = self.terminals.iter().map(|&terminal| {
+        //     self.ir.internalize(terminal).unwrap().usize()
+        // }).collect();
 
-        let start = self.ir.grammar.start();
-        let external_start = self.ir.externalize(start);
+        // let start = self.ir.grammar.start();
+        // let external_start = self.ir.externalize(start);
 
-        let start_variant = self.variant_names[&external_start];
-        let start_type = self.type_map[&external_start].clone();
+        // let start_variant = self.variant_names[&external_start];
+        // let start_type = self.type_map[&external_start].clone();
 
-        let grammar_parts = internal_grammar.to_parts();
+        // let grammar_parts = internal_grammar.to_parts();
 
-        let outer_layer = self.ir.arguments_from_outer_layer.as_ref();
-        let inner_layer_level = outer_layer.map_or(0, |layer| layer.current_level() as u32) + 1;
+        // let outer_layer = self.ir.arguments_from_outer_layer.as_ref();
+        // let inner_layer_level = outer_layer.map_or(0, |layer| layer.current_level() as u32) + 1;
 
-        let arguments_from_outer_layer_opt = self.ir.arguments_from_outer_layer.as_ref().map(|arg| {
-            let terminal_names = arg.terminals().iter().map(|&sym| {
-                self.ir.name_of_external(sym).unwrap().to_ident()
-            }).collect();
-            let terminal_variants = arg.terminals().iter().map(|&sym| {
-                self.variant_names[&sym]
-            }).collect::<Vec<_>>();
-            let terminal_bare_variants = terminal_variants.iter().map(|name| {
-                rs::Ident::new(&name[.. name.rfind("_").unwrap()], rs::Span::call_site())
-            }).collect();
-            GenArgumentsFromOuterLayer {
-                terminal_names: terminal_names,
-                terminal_variants: terminal_variants,
-                terminal_bare_variants: terminal_bare_variants,
-            }
-        });
+        // let arguments_from_outer_layer_opt = self.ir.arguments_from_outer_layer.as_ref().map(|arg| {
+        //     let terminal_names = arg.terminals().iter().map(|&sym| {
+        //         self.ir.name_of_external(sym).unwrap().to_ident()
+        //     }).collect();
+        //     let terminal_variants = arg.terminals().iter().map(|&sym| {
+        //         self.variant_names[&sym]
+        //     }).collect::<Vec<_>>();
+        //     let terminal_bare_variants = terminal_variants.iter().map(|name| {
+        //         rs::Ident::new(&name[.. name.rfind("_").unwrap()], rs::Span::call_site())
+        //     }).collect();
+        //     GenArgumentsFromOuterLayer {
+        //         terminal_names: terminal_names,
+        //         terminal_variants: terminal_variants,
+        //         terminal_bare_variants: terminal_bare_variants,
+        //     }
+        // });
 
-        let inner_layer = match &self.ir.invocation_of_inner_layer {
-            &InvocationOfInnerLayer::Invoke { ref lexer_invocation, ref embedded_strings } => {
-                Some(GenInvocationOfInnerLayer {
-                    lexer_name: lexer_invocation.name(),
-                    lexer_tts: lexer_invocation.tts(),
-                    str_lhs: embedded_strings.iter().map(|embed| {
-                        self.ir.name_of_external(embed.symbol.elem).unwrap().to_ident()
-                    }).collect(),
-                    str_rhs: embedded_strings.iter().map(|embed| {
-                        embed.string.node
-                    }).collect(),
-                    char_range_lhs: vec![],
-                    char_ranges: vec![],
-                })
-            }
-            &InvocationOfInnerLayer::CharClassifier(ref char_ranges) => {
-                Some(GenInvocationOfInnerLayer {
-                    lexer_name: rs::Ident::new(CHAR_CLASSIFIER_MACRO_NAME, rs::Span::call_site()),
-                    lexer_tts: rs::TokenStream::new(),
-                    str_lhs: vec![],
-                    str_rhs: vec![],
-                    char_range_lhs: char_ranges.iter().map(|&(_, sym)| {
-                        self.ir.name_of_external(sym).unwrap().to_ident()
-                    }).collect(),
-                    char_ranges: char_ranges.iter().map(|&(range, _)| {
-                        range
-                    }).collect(),
-                })
-            }
-            &InvocationOfInnerLayer::None => {
-                None
-            }
-        };
-        // Names of all internal symbols
-        let sym_names = (0 .. grammar_parts.num_syms).map(|sym_id| {
-            let internal_sym = Symbol::from(sym_id);
-            let external_sym = self.ir.externalize(internal_sym);
-            let sym_name = self.ir.name_of_external(external_sym);
-            if let Some(sym_name) = sym_name {
-                sym_name.as_str().to_string()
-            } else {
-                format!("g{}", sym_id)
-            }
-        }).collect();
-        // Per-rule IDs
-        let trace_rule_ids = self.ir.trace_sources.iter().map(|source| {
-            source.rule_id
-        }).collect();
-        // Positions
-        let trace_rule_pos = self.ir.trace_sources.iter().map(|source| {
-            source.rule_pos.clone()
-        }).collect();
-        // Tokens
-        let trace_tokens = self.ir.trace_tokens.clone();
-        // Construct result
-        GenParser {
-            grammar_parts: grammar_parts,
+        // let inner_layer = match &self.ir.invocation_of_inner_layer {
+        //     &InvocationOfInnerLayer::Invoke { ref lexer_invocation, ref embedded_strings } => {
+        //         Some(GenInvocationOfInnerLayer {
+        //             lexer_name: lexer_invocation.name(),
+        //             lexer_tts: lexer_invocation.tts(),
+        //             str_lhs: embedded_strings.iter().map(|embed| {
+        //                 self.ir.name_of_external(embed.symbol.elem).unwrap().to_ident()
+        //             }).collect(),
+        //             str_rhs: embedded_strings.iter().map(|embed| {
+        //                 embed.string.node
+        //             }).collect(),
+        //             char_range_lhs: vec![],
+        //             char_ranges: vec![],
+        //         })
+        //     }
+        //     &InvocationOfInnerLayer::CharClassifier(ref char_ranges) => {
+        //         Some(GenInvocationOfInnerLayer {
+        //             lexer_name: rs::Ident::new(CHAR_CLASSIFIER_MACRO_NAME, rs::Span::call_site()),
+        //             lexer_tts: rs::TokenStream::new(),
+        //             str_lhs: vec![],
+        //             str_rhs: vec![],
+        //             char_range_lhs: char_ranges.iter().map(|&(_, sym)| {
+        //                 self.ir.name_of_external(sym).unwrap().to_ident()
+        //             }).collect(),
+        //             char_ranges: char_ranges.iter().map(|&(range, _)| {
+        //                 range
+        //             }).collect(),
+        //         })
+        //     }
+        //     &InvocationOfInnerLayer::None => {
+        //         None
+        //     }
+        // };
+        // // Names of all internal symbols
+        // let sym_names = (0 .. grammar_parts.num_syms).map(|sym_id| {
+        //     let internal_sym = Symbol::from(sym_id);
+        //     let external_sym = self.ir.externalize(internal_sym);
+        //     let sym_name = self.ir.name_of_external(external_sym);
+        //     if let Some(sym_name) = sym_name {
+        //         sym_name.as_str().to_string()
+        //     } else {
+        //         format!("g{}", sym_id)
+        //     }
+        // }).collect();
+        // // Per-rule IDs
+        // let trace_rule_ids = self.ir.trace_sources.iter().map(|source| {
+        //     source.rule_id
+        // }).collect();
+        // // Positions
+        // let trace_rule_pos = self.ir.trace_sources.iter().map(|source| {
+        //     source.rule_pos.clone()
+        // }).collect();
+        // // Tokens
+        // let trace_tokens = self.ir.trace_tokens.clone();
+        // // Construct result
+        // GenParser {
+        //     grammar_parts: grammar_parts,
 
-            start_variant: start_variant,
-            start_type: start_type,
+        //     start_variant: start_variant,
+        //     start_type: start_type,
 
-            epsilon_actions: epsilon_actions,
-            rules: processed_rule,
-            sequences: processed_sequences,
+        //     epsilon_actions: epsilon_actions,
+        //     rules: processed_rule,
+        //     sequences: processed_sequences,
 
-            variant_map: self.variant_map.clone(),
+        //     variant_map: self.variant_map.clone(),
 
-            terminal_names: terminal_names,
-            terminal_ids: terminal_ids,
+        //     terminal_names: terminal_names,
+        //     terminal_ids: terminal_ids,
 
-            arguments_from_outer_layer: arguments_from_outer_layer_opt,
+        //     arguments_from_outer_layer: arguments_from_outer_layer_opt,
 
-            inner_layer_level: inner_layer_level,
-            inner_layer: inner_layer,
+        //     inner_layer_level: inner_layer_level,
+        //     inner_layer: inner_layer,
 
-            trace_rule_ids: trace_rule_ids,
-            trace_rule_pos: trace_rule_pos,
-            trace_tokens: trace_tokens,
+        //     trace_rule_ids: trace_rule_ids,
+        //     trace_rule_pos: trace_rule_pos,
+        //     trace_tokens: trace_tokens,
 
-            sym_names: sym_names,
+        //     sym_names: sym_names,
 
-            item_definitions: self.item_definitions.clone(),
+        //     item_definitions: self.item_definitions.clone(),
 
-            infer: self.infer.clone(),
+        //     infer: self.infer.clone(),
 
-            unique_names: self.unique_names,
-        }
+        //     unique_names: self.unique_names,
+        // }
     }
 
     fn get_action(
         &self,
         origin: usize)
-        -> Option<(rs::TokenStream, Vec<GenArg>)>
+        -> Option<Vec<GenArg>>
     {
         let basic_rule = &self.ir.basic_rules[origin];
         let mut patterns = vec![];
 
-        let rust_expr = match &basic_rule.action {
+        match &basic_rule.action {
             &Action::Struct { ref deep_binds, ref shallow_binds, ref expr } => {
                 if !deep_binds.is_empty() {
                     for &rhs_pos in deep_binds {
@@ -529,20 +506,18 @@ impl IrTranslator {
                         let pat = self.get_auto_pattern(rhs_sym).expect("auto pattern not found");
                         patterns.push(GenArg {
                             num: rhs_pos,
-                            variant: variant,
-                            pat: pat
+                            nonterminal: rhs_sym,
                         });
                     }
                 } else if !shallow_binds.is_empty() {
                     for &(rhs_pos, ident) in shallow_binds {
-                        let rhs_sym = basic_rule.rhs[rhs_pos].node;
-                        let variant = self.variant_names[&rhs_sym];
-                        let pat = ident.into_token_stream();
+                        let rhs_sym = basic_rule.rhs[rhs_pos].elem;
+                        // let variant = self.variant_names[&rhs_sym];
+                        // let pat = ident.into_token_stream();
 
                         patterns.push(GenArg {
                             num: rhs_pos,
-                            variant: variant,
-                            pat: pat
+                            nonterminal: rhs_sym,
                         });
                     }
                 }

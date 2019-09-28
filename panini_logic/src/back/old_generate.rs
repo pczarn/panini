@@ -1,16 +1,100 @@
-#![allow(non_snake_case)]
 
-use std::iter;
 
-use cfg::symbol::Symbol;
-use cfg_regex::ClassRange;
-use gearley::grammar::InternalGrammar;
+                impl<'g, I> Iterator for #Parse<'g, I>
+                    where I: #InferTree<'g> + 'g
+                {
+                    type Item = <#UpperParse<'g, I::Up> as Iterator>::Item;
+                    fn next(&mut self) -> Option<Self::Item> {
+                        self.parse.next()
+                    }
+                }
+                struct #Parse<'g, I> where I: #InferTree<'g> + 'g {
+                    store: Arena<#Value<I::Infer>>,
+                    recognizer: Recognizer<'g, 'g, Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                    finished_node: Option<NodeRef<'g, 'g, I::Node, #Value<I::Infer>>>,
+                    // This field is seen as unused.
+                    #[allow(dead_code)]
+                    bocage: Box<Bocage<'g, 'g, 'g, I::Node, #Value<I::Infer>>>,
+                    traversal: TraversalUnordered<'g, I::Node, #Value<I::Infer>>,
+                    result: ::std::slice::Iter<'g, #Value<I::Infer>>,
+                }
 
-use rs;
-use proc_macro2::{Literal, TokenTree};
-// use quote::ToTokens;
+                #[allow(dead_code)]
+                impl<'g, I> #Parse<'g, I>
+                    where I: #InferTree<'g> + 'g
+                {
+                    fn begin_earleme(&mut self) {
+                        // Nothing to do
+                    }
 
-// Info for generation.
+                    fn traced_begin_earleme(&mut self) {
+                        // Nothing to do?
+                        self.begin_earleme();
+                    }
+
+                    fn scan_tok(&mut self, token: Symbol, value: I::Node) {
+                        self.recognizer.scan(token, value);
+                    }
+
+                    fn advance(&mut self) -> bool {
+                        self.recognizer.advance()
+                    }
+
+                    fn traced_advance(&mut self) -> bool {
+                        if self.recognizer.is_exhausted() {
+                            false
+                        } else {
+                            let mut finished_node = None;
+                            let mut completion_items = vec![];
+                            {
+                                let start_sym = Symbol::from(#start_sym);
+                                // Access completions. This must come after getting `start_sym`.
+                                let mut completions = self.recognizer.completions();
+                                while let Some(mut completion) = completions.next_completion() {
+                                    while let Some(item) = completion.next() {
+                                        completion_items.push(item);
+                                        completion.push(item);
+                                    }
+                                    let node = completion.complete();
+                                    if completion.origin() == 0 && completion.symbol() == start_sym {
+                                        finished_node = Some(node);
+                                    }
+                                }
+                            };
+                            self.finished_node = finished_node;
+                            self.recognizer.advance_without_completion();
+                            print_trace(&self.recognizer, &completion_items[..], TRACE_INFO);
+                            true
+                        }
+                    }
+
+                    fn end_of_input(&mut self) {
+                        // Update the finished node field of this parse.
+                        self.finished_node = Some(self.recognizer.finished_node());
+                    }
+
+                    fn traced_end_of_input(&mut self) {
+                        // Nothing to do.
+                    }
+
+                    fn fmt_exhaustion(&self, fmt: &mut fmt::Formatter, input_pos: usize)
+                        -> Result<(), fmt::Error>
+                    {
+                        try!(write!(fmt, "Parse error at {}:\nexpected", input_pos));
+                        let mut terminals = self.recognizer.expected_terminals();
+                        let last = terminals.next();
+                        for terminal in terminals {
+                            try!(write!(fmt, " `{}`,", SYM_NAMES[terminal.usize()]));
+                        }
+                        if let Some(last) = last {
+                            write!(fmt, " or `{}`.", SYM_NAMES[last.usize()])
+                        } else {
+                            write!(fmt, "end of input.")
+                        }
+                    }
+                }
+
+
 
 pub struct GenParser {
     // Serialized grammar
@@ -207,6 +291,9 @@ impl UniqueNames {
         }
     }
 }
+
+impl InstructionList {
+    pub fn translate(self) -> rs::TokenStream {
 
 pub enum GenResult {
     Parser(String),

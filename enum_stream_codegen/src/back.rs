@@ -64,6 +64,8 @@ enum_coder! {
             variant: rs::Ident,
         },
 
+        MakeValueConditionalsTail,
+
         MakeNegativePatternMatchArm {
             pattern: rs::Pat,
         },
@@ -108,7 +110,8 @@ enum_coder! {
                 variant,
             };
         }
-        Concat(ir.rules.len());
+        MakeValueConditionalsTail();
+        Concat(ir.rules.len() + 1);
         for (n, rule) in ir.rules.iter().enumerate() {
             for negative_pattern in &rule.negative {
                 MakeNegativePatternMatchArm {
@@ -207,105 +210,69 @@ fn eval_instruction(state: &mut InterpreterState, instruction: Instruction) -> r
             InferConstraint,
         } => {
             quote! {
-                struct EnumStream<C> {
-                    closure: C,
-                }
-
-                struct EnumStreamParser<C, D> {
+                struct EnumStream<'g, C, D, I> {
                     closure: C,
                     eval_closure: D,
-                    builder: #UpperParseFactory,
+                    #(#language: #Language<'g, I>,)*
                 }
 
-                struct Parse<'g, I> where I: #UpperInferTree<'g> + 'g {
-                    parse: Box<#UpperParse<'g, I>>,
+                struct Parse<'g, I> where I: Infer {
+                    #(
+                        #sub_parse: #SubParse<'g, I>,
+                    )*
+                    traced: bool,
                 }
 
-                struct ExhaustedParse<'g, I> where I: #UpperInferTree<'g> + 'g {
-                    parse: Box<#UpperParse<'g, I>>,
+                struct ExhaustedParse<'g, I> where I: Infer {
+                    parse: Parse<'g, I>,
                     input_pos: usize,
-                }
-
-                impl<C> EnumStream<C> {
-                    fn new(closure: C) -> Self {
-                        EnumStream {
-                            closure: closure,
-                        }
-                    }
-
-                    fn with_parse_builder_and_eval_closure<'g, D, I>(
-                        self,
-                        builder: #UpperParseFactory,
-                        eval_closure: D)
-                        -> EnumStreamParser<C, D>
-                        where D: FnMut(&'g mut #UpperParse<'g, I>),
-                            I: #UpperInferTree<'g> + 'g
-                    {
-                        EnumStreamParser {
-                            closure: self.closure,
-                            eval_closure: eval_closure,
-                            builder: builder,
-                        }
-                    }
                 }
 
                 // Either `parse` or `traced_parse` may be dead code.
                 #[allow(dead_code)]
-                impl<C, D> EnumStreamParser<C, D> {
+                impl<'g, C, D, I> EnumStream<'g, C, D, I>
+                    where
+                        D: FnMut(&'g mut Parse<'g, I>),
+                        I: Infer,
+                {
                     fn parse<'g, I, Iter>(&'g mut self, into_iter: Iter)
                         -> Result<Parse<'g, I>, ExhaustedParse<'g, I>>
-                        where C: Fn(usize, Iter::Item) -> bool,
-                            D: FnMut(&'g mut #UpperParse<'g, I>),
-                            Iter: IntoIterator<Item = I::Node>,
+                        where
+                            Iter: IntoIterator<Item = I::#UpperInfer::Leaf>,
                             Iter::Item: Copy,
-                            I: #UpperInferTree<'g> + 'g,
+                            C: Fn(usize, Iter::Item) -> bool,
+                            
                     {
                         self.common_parse(into_iter, false)
                     }
 
                     fn traced_parse<'g, I, Iter>(&'g mut self, into_iter: Iter)
                         -> Result<Parse<'g, I>, ExhaustedParse<'g, I>>
-                        where C: Fn(usize, Iter::Item) -> bool,
-                            D: FnMut(&'g mut #UpperParse<'g, I>),
-                            Iter: IntoIterator<Item = I::Node>,
+                        where
+                            Iter: IntoIterator<Item = I::#UpperInfer::Leaf>,
                             Iter::Item: Copy,
-                            I: #UpperInferTree<'g> + 'g,
+                            C: Fn(usize, Iter::Item) -> bool,
                     {
                         self.common_parse(into_iter, true)
                     }
                 }
-
-                fn scan_elem<'g, C, I>(
-                    closure: &mut C,
-                    tokens: &[Symbol],
-                    parse: &mut #UpperParse<'g, I>,
-                    elem: I::Node)
-                    where C: Fn(usize, I::Node) -> bool,
-                        I: #UpperInferTree<'g> + 'g,
-                {
-                    for (id, &token) in tokens.iter().enumerate() {
-                        if closure(id, elem) {
-                            parse.scan_tok(token, elem);
-                        }
-                    }
+                
+                trait Infer {
+                    #(
+                        type #SubInfer: #SubInfer;
+                    )*
                 }
 
-                impl<'g, I> Iterator for Parse<'g, I>
-                    where I: #UpperInferTree<'g> + 'g
+                struct InferVal<#SubInferVars>(
+                    ::std::marker::PhantomData<(#SubInferVars)>
+                );
+
+                impl<#SubInferVars> Infer for InferVal<#SubInferVars>
                 {
-                    type Item = <#UpperParse<'g, I> as Iterator>::Item;
-                    fn next(&mut self) -> Option<Self::Item> {
-                        self.parse.next()
-                    }
+                    #(
+                        type #SubInfer = #SubInferVal;
+                    )*
                 }
-
-                trait #InferConstraint<'g, Node>: #UpperInfer<T = Node>
-                    where Node: Copy
-                {}
-
-                impl<'g, Node, T> #InferConstraint<'g, Node> for T
-                    where Node: Copy, T: #UpperInfer<T = Node>
-                {}
 
                 impl<'g, I> fmt::Debug for ExhaustedParse<'g, I>
                     where I: #UpperInferTree<'g> + 'g
@@ -329,54 +296,46 @@ fn eval_instruction(state: &mut InterpreterState, instruction: Instruction) -> r
         } => {
             let tokens = state.pop();
             quote! {
-                impl<C, D> EnumStreamParser<C, D> {
+                impl<C, D> EnumStream<C, D> {
                     #[inline]
                     fn common_parse<'g, I, Iter>(&'g mut self, into_iter: Iter, traced: bool)
                         -> Result<Parse<'g, I>, ExhaustedParse<'g, I>>
                         where C: Fn(usize, Iter::Item) -> bool,
-                            D: FnMut(&'g mut #UpperParse<'g, I>),
-                            Iter: IntoIterator<Item = I::Node>,
+                            D: FnMut(&'g mut Parse<'g, I>),
+                            Iter: IntoIterator<Item = I::#UpperInfer::Leaf>,
                             Iter::Item: Copy,
-                            I: #UpperInferTree<'g> + 'g,
+                            I: Infer,
                     {
-                        let terminal_accessor = self.builder.terminal_accessor();
+                        let terminal_accessor = self.#upper_language.terminal_accessor();
                         let tokens = &[#tokens];
-                        let mut parse_box = Box::new(self.builder.new_parse());
-                        let parse: &'g mut #UpperParse<'g, I>;
-                        unsafe {
-                            parse = &mut *(&mut *parse_box as *mut _);
-                        }
+                        let mut parse = Parse {
+                            #(
+                                #parse: self.#language.parse()
+                            ),*
+                            traced: traced,
+                        };
+                        parse.#upper_begin_input();
                         let iter = into_iter.into_iter();
                         for (i, elem) in iter.enumerate() {
-                            if traced {
-                                parse.traced_begin_earleme();
-                            } else {
-                                parse.begin_earleme();
+                            parse.#upper_begin_earleme();
+                            for (id, &token) in tokens.iter().enumerate() {
+                                if self.closure(id, elem) {
+                                    self.#upper_scan_tok(token, elem);
+                                }
                             }
-                            scan_elem(&mut self.closure, tokens, parse, elem);
-                            let success = if traced {
-                                parse.traced_advance()
-                            } else {
-                                parse.advance()
-                            };
+                            let success = parse.#upper_end_earleme();
                             if !success {
                                 return Err(ExhaustedParse {
-                                    parse: parse_box,
+                                    parse: parse,
                                     input_pos: i,
                                 });
                             }
                         }
-                        if traced {
-                            parse.traced_end_of_input();
-                        } else {
-                            parse.end_of_input();
-                        }
+                        parse.#upper_end_input();
                         (self.eval_closure)(
-                            parse
+                            &mut parse
                         );
-                        Ok(Parse {
-                            parse: parse_box,
-                        })
+                        Ok(parse)
                     }
                 }
             }
@@ -391,6 +350,13 @@ fn eval_instruction(state: &mut InterpreterState, instruction: Instruction) -> r
                     #UpperValue::#variant(value)
                 } else
             }
+        }
+        MakeValueConditionalsTail => {
+            quote! (
+                {
+                    unreachable!()
+                }
+            )
         }
         MakeNegativePatternMatchArm {
             pattern
@@ -446,34 +412,47 @@ fn eval_instruction(state: &mut InterpreterState, instruction: Instruction) -> r
             let value_conditionals = state.pop();
             let terminal_actions = state.pop();
             quote! {
-                macro_rules! #layer_macro {
-                    (
-                        @closure
-                        $upper_builder:expr,
-                        $ignored__parse:expr,
-                        $node:expr;
-                    ) => ({
-                        let terminal_accessor = #UpperTerminalAccessor;
-                        let upper_builder = &mut $upper_builder;
-                        let sym = ($node).terminal;
-                        let value = ($node).value;
-                        let tokens = &[#tokens];
-                        let value = #value_conditionals {
-                            unreachable!()
-                        };
-                        upper_builder.reserve(1);
-                        upper_builder.push(value);
-                    });
-                    (@builder @factory [$factory:expr] @closure [$closure:expr]) => (
-                        EnumStream::new(|id: usize, item| {
+                struct EnumResult(#UpperValue);
+                struct EnumResultOnly(#UpperValue);
+
+                impl EnumResult {
+                    const fn len() -> usize {
+                        1
+                    }
+
+                    fn into_iter_summands(self) -> iter::Once<EnumResultOnly> {
+                        iter::once(EnumResultOnly(self.0))
+                    }
+                }
+
+                impl EnumResultOnly {
+                    #(
+                        fn #terminal(self) -> #T {
+                            self.0
+                        }
+                    )*
+                }
+
+                let #eval_closure = |_, sym, value| {
+                    let sym = ($node).terminal;
+                    let value = ($node).value;
+                    let terminal_accessor = #UpperTerminalAccessor;
+                    let tokens = &[#tokens];
+                    EnumResult(#value_conditionals)
+                };
+
+                let top_result = |top_eval_closure| {
+                    EnumStream {
+                        closure: |id: usize, item| {
                             #terminal_actions
                             false
-                        }).with_parse_builder_and_eval_closure($factory, $closure)
-                    );
-                    (@get $parse:expr) => (
-                        $parse
-                    )
-                }
+                        },
+                        eval_closure: top_eval_closure,
+                        #(
+                            #language: #Language::new(),
+                        )*
+                    }
+                };
             }
         }
     }

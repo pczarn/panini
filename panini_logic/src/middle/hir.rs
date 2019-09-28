@@ -4,8 +4,7 @@ use std::cell::RefCell;
 
 use cfg::*;
 
-use rs;
-use front::{ast, Name};
+use input::ast;
 use front::visit::RhsAstVisitor;
 use middle::{ActionExpr, Ty, AutoTy, Rule};
 use middle::rule::{PrecedenceLevel, PrecedencedRuleAlternative};
@@ -51,7 +50,7 @@ impl Hir<SymbolicName> {
 
         let mut levels_bnf_rules = vec![];
         let mut local_rhs_counter = *rhs_counter;
-        for level in &stmt.rhs {
+        for level in &stmt.body {
             let mut bnf_rules_for_level = vec![];
             for &(ref rhs, ref action) in level {
                 let rule = self.transform_rhs(stmt.lhs, rhs, local_rhs_counter);
@@ -79,12 +78,14 @@ impl Hir<SymbolicName> {
                     self.type_map.insert(rule.lhs.node, ty);
                 }
 
-                bnf_rules_for_level.push(Rule::BnfRule {
+                bnf_rules_for_level.push(Rule {
                     lhs: rule.lhs,
-                    rhs: rule.rhs,
-                    tuple_binds: rule.tuple_binds,
-                    deep_binds: rule.deep_binds,
-                    shallow_binds: rule.shallow_binds,
+                    properties: SimpleRuleProperties(RhsAndBinds {
+                        rhs: rule.rhs,
+                        tuple_binds: rule.tuple_binds,
+                        deep_binds: rule.deep_binds,
+                        shallow_binds: rule.shallow_binds,
+                    })
                     source_origin: rule.source_origin,
                     action: action,
                 });
@@ -96,15 +97,17 @@ impl Hir<SymbolicName> {
             *rhs_counter = local_rhs_counter;
         } else if levels_bnf_rules.len() > 1 {
             // Declare a precedenced rule
-            let rule = Rule::PrecedencedRule {
+            let rule = Rule {
                 lhs: stmt.lhs,
-                rhs_levels: levels_bnf_rules.into_iter().map(|level| {
+                properties: PrecedencedRuleProperties {
+                rhs_levels: 
+                levels_bnf_rules.into_iter().map(|level| {
                     PrecedenceLevel {
                         rules: level.into_iter().map(|bnf_rule| {
                             match bnf_rule {
-                                Rule::BnfRule { rhs, tuple_binds, deep_binds, shallow_binds,
-                                                action, source_origin, .. } => {
+                                Rule::BnfRule { properties, action, source_origin, .. } => {
                                     PrecedencedRuleAlternative {
+                                        properties: {}
                                         rhs: rhs,
                                         tuple_binds: tuple_binds,
                                         deep_binds: deep_binds,
@@ -131,9 +134,12 @@ impl Hir<SymbolicName> {
         let top_rule = visitor.rule_stack.pop().expect("one remaining rule expected");
         assert!(visitor.rule_stack.is_empty(), "only one remaining rule expected");
 
-
         for new_rule in visitor.new_rules.drain(..) {
-            let new_auto_ty = Ty::Auto(new_rule.auto_ty);
+            let new_auto_ty = new_rule.properties.is_sequence() {
+                Ty::SequenceVec(new_rule.rhs.node)
+            } else {
+                Ty::Auto(new_rule.auto_ty)
+            };
             if self.type_map.contains_key(&new_rule.lhs.node) {
                 self.type_equality.push((new_rule.lhs.node, new_auto_ty));
             } else {
@@ -141,30 +147,10 @@ impl Hir<SymbolicName> {
             }
             self.rules.push(Rule::BnfRule {
                 lhs: new_rule.lhs,
-                rhs: new_rule.rhs,
-                tuple_binds: new_rule.tuple_binds,
-                shallow_binds: new_rule.shallow_binds,
-                deep_binds: new_rule.deep_binds,
+                properties: new_rule.properties,
                 source_origin: new_rule.source_origin,
                 action: ActionExpr::Auto,
             });
-        }
-
-        for new_sequence in visitor.new_sequences.drain(..) {
-            let new_auto_ty = Ty::SequenceVec(new_sequence.rhs.node);
-            if self.type_map.contains_key(&new_sequence.lhs.node) {
-                self.type_equality.push((new_sequence.lhs.node, new_auto_ty));
-            } else {
-                self.type_map.insert(new_sequence.lhs.node, new_auto_ty);
-            }
-            self.rules.push(Rule::SequenceRule {
-                lhs: new_sequence.lhs,
-                rhs: new_sequence.rhs,
-                min: new_sequence.min,
-                max: new_sequence.max,
-                source_origin: new_sequence.source_origin,
-                action: ActionExpr::Auto,
-            })
         }
 
         self.embedded_strings.extend(visitor.embedded_strings.into_iter());
@@ -255,7 +241,6 @@ impl Hir<SymbolicName> {
 struct FlattenRhsAst {
     rule_stack: Vec<FlatRule>,
     new_rules: Vec<FlatRule>,
-    new_sequences: Vec<FlatSequence>,
     embedded_strings: Vec<EmbeddedString<SymbolicName>>,
     rule_id: u32,
     cur_rule_pos: u32,
@@ -263,23 +248,35 @@ struct FlattenRhsAst {
 
 struct FlatRule {
     lhs: Name,
-    rhs: Vec<Name>,
+    properties: FlatRuleProperties,
     // Indexes are RHS positions.
-    tuple_binds: Vec<usize>,
-    deep_binds: Vec<usize>,
-    shallow_binds: Vec<(usize, rs::Ident)>,
     auto_ty: AutoTy<rs::Name>,
     source_origin: SourceOrigin,
 }
 
-// The AutoTy for a Sequence is a Vec<type of rhs>.
-// The action is not set here, it is later set to Auto.
-struct FlatSequence {
-    lhs: Name,
-    rhs: Name,
-    min: u32,
-    max: Option<u32>,
-    source_origin: SourceOrigin,
+enum FlatRuleProperties {
+    RuleProperties {
+        rhs: Vec<Name>,
+        tuple_binds: Vec<usize>,
+        deep_binds: Vec<usize>,
+        shallow_binds: Vec<(usize, rs::Ident)>,
+    },
+    // The AutoTy for a Sequence is a Vec<type of rhs>.
+    // The action is not set here, it is later set to Auto.
+    SequenceProperties {
+        rhs: Name,
+        min: u32,
+        max: Option<u32>,
+    },
+}
+
+impl FlatRuleProperties {
+    fn is_sequence(&self) -> bool {
+        match self {
+            &SequenceProperties(..) => true,
+            &RuleProperties(..) => false,
+        }
+    }
 }
 
 impl FlatRule {
@@ -304,7 +301,6 @@ impl FlattenRhsAst {
         FlattenRhsAst {
             rule_stack: vec![FlatRule::new(lhs, rule_id, 0)],
             new_rules: vec![],
-            new_sequences: vec![],
             embedded_strings: vec![],
             rule_id: rule_id,
             cur_rule_pos: 0,
@@ -346,11 +342,13 @@ impl RhsAstVisitor for FlattenRhsAst {
         self.rule_stack.push(FlatRule::new(rule_lhs, self.rule_id, self.cur_rule_pos));
         // Define the rule declared above.
         self.walk_sequence(sequence);
-        self.new_sequences.push(FlatSequence {
+        self.new_rules.push(FlatSequence {
             lhs: seq_lhs,
-            rhs: rule_lhs,
-            min: sequence.min,
-            max: sequence.max,
+            properties: SequenceProperties {
+                rhs: rule_lhs,
+                min: sequence.min,
+                max: sequence.max,
+            },
             source_origin: SourceOrigin {
                 rule_id: self.rule_id,
                 rule_pos: vec![older_rule_pos, self.cur_rule_pos],
@@ -363,7 +361,7 @@ impl RhsAstVisitor for FlattenRhsAst {
             // Optimize out a rule with a single RHS symbol.
             // TODO: deep binds in sequences with iterators
             let sym = new_rule.rhs[0];
-            self.new_sequences.iter_mut().find(|seq| seq.lhs == seq_lhs).unwrap().rhs = sym;
+            self.new_rules.iter_mut().find(|seq| seq.lhs == seq_lhs).unwrap().rhs = sym;
         } else {
             // The inner rule goes to `new_rules`.
             self.new_rules.push(new_rule);

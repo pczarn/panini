@@ -3,76 +3,88 @@ use std::hash::Hash;
 use cfg::{Symbol, ContextFree};
 use gearley::grammar::Grammar;
 
-use rs;
 use middle::{Action, ActionExpr};
 use middle::trace::SourceOrigin;
+use input::SpanId;
+
+use self::RuleProperties::*;
 
 #[derive(Clone)]
-pub enum Rule<S = Symbol> {
-    BnfRule {
-        lhs: rs::Spanned<S>,
-        rhs: Vec<rs::Spanned<S>>,
-        tuple_binds: Vec<usize>,
-        deep_binds: Vec<usize>,
-        shallow_binds: Vec<(usize, rs::Ident)>,
-        action: ActionExpr,
-        source_origin: SourceOrigin,
-    },
-    SequenceRule {
-        lhs: rs::Spanned<S>,
-        rhs: rs::Spanned<S>,
+pub(super) struct Rule {
+    lhs: Symbol,
+    properties: RuleProperties,
+    action: ActionExpr,
+    source_origin: SourceOrigin,
+}
+
+#[derive(Clone, Debug)]
+pub struct PrecedencedRuleAlternative {
+    pub(super) level: u32,
+    pub(super) rhs_and_binds: RhsAndBinds,
+    pub(super) action: ActionExpr,
+    pub(super) source_origin: SourceOrigin,
+}
+
+pub enum RuleProperties<S> {
+    SimpleRuleProperties(RhsAndBinds),
+    SequenceProperties {
+        rhs: S,
+        span: SpanId,
         min: u32,
         max: Option<u32>,
-        action: ActionExpr,
-        source_origin: SourceOrigin,
     },
-    PrecedencedRule {
-        lhs: rs::Spanned<S>,
-        rhs_levels: Vec<PrecedenceLevel<S>>,
+    PrecedencedRuleProperties {
+        rhs_levels: PrecedencedRuleAlternatives<S>,
     },
 }
 
-#[derive(Clone, Debug)]
-pub struct PrecedenceLevel<S> {
-    pub rules: Vec<PrecedencedRuleAlternative<S>>,
+pub struct RhsAndBinds {
+    pub(super) rhs: Vec<Symbol>,
+    pub(super) tuple_binds: Vec<usize>,
+    pub(super) deep_binds: Vec<usize>,
+    pub(super) shallow_binds: Vec<(usize, rs::Ident)>,
 }
 
-#[derive(Clone, Debug)]
-pub struct PrecedencedRuleAlternative<S> {
-    pub rhs: Vec<rs::Spanned<S>>,
-    pub tuple_binds: Vec<usize>,
-    pub deep_binds: Vec<usize>,
-    pub shallow_binds: Vec<(usize, rs::Ident)>,
-    pub action: ActionExpr,
-    pub source_origin: SourceOrigin,
+pub struct PrecedencedRuleAlternatives(Vec<PrecedencedRuleAlternative>);
+
+impl PrecedencedRuleAlternatives {
+    fn by_level(&self) -> HashMap<u32, Vec<PrecedencedRuleAlternative<S>>> {
+        let mut map = HashMap::new();
+        for alternative in &self.0 {
+            let entry = map.entry(alternative.level).or_insert(vec![]);
+            entry.push(alternative.clone());
+        }
+        map
+    }
 }
 
 /// A basic rule has simplified information about a rule.
 /// how to say the action is important, the action is carried
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BasicRule<S = Symbol> {
-    pub lhs: rs::Spanned<S>,
-    pub rhs: Vec<rs::Spanned<S>>,
+    pub lhs: S,
+    pub lhs_span: SpanId,
+    pub rhs: Vec<S>,
     pub action: Action,
 }
 
 impl Rule {
     pub fn add_to(&self, grammar: &mut Grammar) {
-        match self {
-            &Rule::BnfRule { lhs, ref rhs, .. } => {
+        match &self.properties {
+            &BnfRuleProperties(ref rhs_and_binds) => {
                 let rhs_syms: Vec<_>;
-                rhs_syms = rhs.iter().map(|s| s.node).collect();
-                grammar.rule(lhs.node).rhs(&rhs_syms);
+                rhs_syms = rhs.iter().map(|s| s).collect();
+                grammar.rule(self.lhs.node).rhs(&rhs_syms);
             }
-            &Rule::SequenceRule { lhs, rhs, min, max, .. } => {
-                grammar.sequence(lhs.node).inclusive(min, max).rhs(rhs.node);
+            &SequenceProperties { rhs, min, max, .. } => {
+                grammar.sequence(self.lhs.node).inclusive(min, max).rhs(rhs.node);
             }
-            &Rule::PrecedencedRule { lhs, ref rhs_levels, .. } => {
-                let mut rule = grammar.precedenced_rule(lhs.node);
-                for rhs_level in rhs_levels {
-                    for rhs in &rhs_level.rules {
+            &PrecedencedRuleProperties { ref rhs_levels, .. } => {
+                let mut rule = grammar.precedenced_rule(self.lhs.node);
+                for (level, alternatives) in rhs_levels.by_level() {
+                    for rule in &alternatives.0 {
                         let rhs_syms: Vec<_>;
-                        rhs_syms = rhs.rhs.iter().map(|s| s.node).collect();
+                        rhs_syms = rule.rhs_and_binds.rhs.iter().map(|s| s.node).collect();
                         rule = rule.rhs(&rhs_syms);
                     }
                     rule = rule.lower_precedence();
@@ -82,64 +94,52 @@ impl Rule {
     }
 
     pub fn basic_rules(&self) -> Vec<BasicRule> {
-        match self {
-            &Rule::BnfRule { lhs, ref rhs, action: ref action_expr,
-                             ref deep_binds, ref shallow_binds, ref tuple_binds, .. } => {
-                let action;
-                if action_expr.is_inline() ||
-                        !deep_binds.is_empty() ||
-                        !shallow_binds.is_empty() {
-                    action = Action::Struct {
-                        deep_binds: deep_binds.clone(),
-                        shallow_binds: shallow_binds.clone(),
-                        expr: action_expr.clone(),
-                    };
-                } else {
-                    action = Action::Tuple {
-                        tuple_binds: tuple_binds.clone(),
-                    };
-                }
+        fn make_action(action_expr: &ActionExpr, rhs_and_binds: &RhsAndBinds) -> Action {
+            let action;
+            if action_expr.is_inline() ||
+                    !rhs_and_binds.deep_binds.is_empty() ||
+                    !rhs_and_binds.shallow_binds.is_empty() {
+                action = Action::Struct {
+                    deep_binds: rhs_and_binds.deep_binds.clone(),
+                    shallow_binds: rhs_and_binds.shallow_binds.clone(),
+                    expr: action_expr.clone(),
+                };
+            } else {
+                action = Action::Tuple {
+                    tuple_binds: rhs_and_binds.tuple_binds.clone(),
+                };
+            }
+            action
+        }
+
+        match &self.properties {
+            &BnfRuleProperties(ref rhs_and_binds) => {
                 let basic_rule = BasicRule {
                     lhs: lhs,
-                    rhs: rhs.clone(),
-                    action: action,
+                    rhs: rhs_and_binds.rhs.clone(),
+                    action: make_action(&self.action, rhs_and_binds),
                 };
                 vec![basic_rule]
             }
-            &Rule::SequenceRule { lhs, rhs, .. } => {
+            &SequenceProperties { rhs, .. } => {
                 let basic_rule = BasicRule {
-                    lhs: lhs,
+                    lhs: self.lhs,
                     rhs: vec![rhs],
                     action: Action::Sequence,
                 };
                 vec![basic_rule]
             }
-            &Rule::PrecedencedRule { lhs, ref rhs_levels, .. } => {
+            &PrecedencedRuleProperties { ref rhs_levels, .. } => {
                 let mut basic_rules = vec![];
-                for level in rhs_levels {
-                    for rule in &level.rules {
-                        let action;
-                        if rule.action.is_inline() ||
-                                !rule.deep_binds.is_empty() ||
-                                !rule.shallow_binds.is_empty() {
-                            action = Action::Struct {
-                                deep_binds: rule.deep_binds.clone(),
-                                shallow_binds: rule.shallow_binds.clone(),
-                                expr: rule.action.clone(),
-                            };
-                        } else {
-                            action = Action::Tuple {
-                                tuple_binds: rule.tuple_binds.clone(),
-                            };
-                        }
-                        let basic_rule = BasicRule {
-                            // where from?
-                            lhs: lhs,
-                            rhs: rule.rhs.clone(),
-                            action: action,
-                        };
-                        basic_rules.push(basic_rule);
-                    }
+                for alternative in &rhs_levels.0 {
+                    let basic_rule = BasicRule {
+                        // where from?
+                        lhs: lhs,
+                        lhs: self.lhs,
+                        rhs: alternative.rhs.clone(),
+                        action: make_action(&alternative.action, &alternative.rhs_and_binds),
+                    };
+                    basic_rules.push(basic_rule);
                 }
                 basic_rules
             }

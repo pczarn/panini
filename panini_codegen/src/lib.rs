@@ -20,13 +20,14 @@ extern crate cfg;
 extern crate cfg_regex;
 extern crate gearley;
 
+extern crate panini_logic;
+
 // #[path = "middle/ecs.rs"]
 // mod ecs;
 
-pub mod front;
-pub mod middle;
-pub mod back;
-
+pub mod generate;
+pub mod instruction;
+pub mod trans;
 pub mod rs;
 
 pub use front::lexer;
@@ -37,7 +38,7 @@ use front::ast::Stmts;
 use middle::error::TransformationError;
 use back::GenResult;
 
-pub fn codegen<'cx>(sp: rs::Span,
+pub fn lower<'cx>(sp: rs::Span,
                     stmts: Stmts) -> rs::TokenStream {
     
     match phase_1_lower_to_ir(stmts) {
