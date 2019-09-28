@@ -4,13 +4,14 @@ use std::slice;
 
 use cfg::Symbol;
 
-use rs;
+use input::RustTyId;
 
 //type RustTy = rs::P<rs::Ty>;
 
 #[derive(Clone, Debug)]
 pub enum Ty<S = Symbol> {
-    RustTy(rs::TokenStream),
+    RustTy(RustTyId),
+    RustTerminalTy,
     Auto(AutoTy<S>),
     SequenceVec(S),
     Infer,
@@ -39,6 +40,14 @@ impl<S> Ty<S> {
                 // for sequence??
                 Symbols::FieldSymbols([].iter())
             }
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        if let &Ty::RustTerminalTy = self {
+            true
+        } else {
+            false
         }
     }
 }

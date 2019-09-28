@@ -2,7 +2,7 @@
 
 extern crate cfg;
 extern crate gearley;
-extern crate panini_codegen;
+extern crate panini_logic;
 #[macro_use]
 extern crate maplit;
 
@@ -11,11 +11,10 @@ mod support;
 use cfg::ContextFreeRef;
 use gearley::grammar::Grammar;
 
-use panini_codegen::front::ast::{self, Stmts, Stmt, RhsElement, Rhs, RhsAst, Sequence};
-use panini_codegen::middle::*;
-use panini_codegen::middle::trace::SourceOrigin;
-use panini_codegen::middle::rule::BasicRule;
-use panini_codegen::rs;
+use panini_logic::front::ast::{self, Stmts, Stmt, RhsElement, Rhs, RhsAst, Sequence};
+use panini_logic::middle::*;
+use panini_logic::middle::trace::SourceOrigin;
+use panini_logic::middle::rule::BasicRule;
 
 #[test]
 fn test_sequence_ir() {

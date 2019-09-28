@@ -1,6 +1,6 @@
 use std::slice;
 
-use rs;
+use input::{IdentId, ExprId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
@@ -9,7 +9,7 @@ pub enum Action {
     },
     Struct {
         deep_binds: Vec<usize>,
-        shallow_binds: Vec<(usize, rs::Ident)>,
+        shallow_binds: Vec<(usize, IdentId)>,
         expr: ActionExpr,
     },
     Sequence,
@@ -21,7 +21,7 @@ pub enum ActionExpr {
     Auto,
     // Action
     Inline {
-        expr: rs::TokenStream,
+        expr: ExprId,
     },
 }
 
@@ -51,7 +51,7 @@ impl Action {
 
 pub enum DirectlyBoundPositions<'a> {
     List(slice::Iter<'a, usize>),
-    Chain(slice::Iter<'a, usize>, slice::Iter<'a, (usize, rs::Ident)>),
+    Chain(slice::Iter<'a, usize>, slice::Iter<'a, (usize, IdentId)>),
 }
 
 impl<'a> Iterator for DirectlyBoundPositions<'a> {
