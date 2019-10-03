@@ -2,7 +2,7 @@
 name = "panini_logic"
 version = "0.0.0"
 
-description = "A parser generator. This package handles code generation for the `grammar` macro."
+description = "A parser generator. This package handles logic for the parser generator."
 authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
 documentation = "http://pczarn.github.io/panini/"
 repository = "https://github.com/pczarn/panini/"
@@ -14,21 +14,12 @@ name = "panini_logic"
 [dependencies]
 log = "0.4"
 env_logger = "0.6"
-quote = { path = "../../quote/" }
-proc-macro2 = { path = "../../proc-macro2/" }
+quote = "1.0"
+proc-macro2 = "1.0"
 bit-matrix = "0.2"
 cfg = "0.3"
 cfg-regex = "0.0"
 gearley = "0.0"
 serde_cbor = "0.9"
 enum_coder = "0.0"
-
-[dev-dependencies]
-maplit = "0.1"
-
-[patch.crates-io]
-cfg-regex = { path = "/home/piotr/src/cfg-regex" }
-panini_macros_snapshot = { path = "/home/piotr/src/panini-snapshot/panini_macros_snapshot" }
-gearley = { path = "/home/piotr/src/gearley" }
-cfg = { path = "/home/piotr/src/cfg" }
-regex_dfa = { path = "/home/piotr/src/regex-dfa" }
+maplit = "1.0"

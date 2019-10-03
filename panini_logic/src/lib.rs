@@ -20,11 +20,14 @@ extern crate gearley;
 
 extern crate enum_coder;
 
+#[macro_use]
+extern crate maplit;
+
 // #[path = "middle/ecs.rs"]
 // mod ecs;
 
 // pub mod front;
-// pub mod middle;
+pub mod middle;
 // pub mod back;
 pub mod input;
 // pub mod output;

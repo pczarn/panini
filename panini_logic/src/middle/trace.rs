@@ -1,19 +1,13 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
-use front::Name;
-use front::ast::{self, Stmts, Stmt, Rhs};
-use front::visit::RhsAstVisitor;
-use rs;
+use input::ast::{Stmts, Rhs, RhsAst};
+use input::FragmentId;
+use middle::flatten_stmts::{Path, Position};
 
 #[derive(Debug)]
 pub struct Trace {
-    stmts: Vec<TraceStmt>
-}
-
-#[derive(Debug)]
-pub struct TraceStmt {
-    pub lhs: rs::Ident,
-    pub rhs: Vec<TraceToken>,
+    tokens: BTreeMap<Path, TraceToken>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,27 +16,34 @@ pub struct SourceOrigin {
     pub rule_pos: Vec<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum TraceToken {
-    Name(rs::Ident),
+    Fragment(FragmentId),
     String(String),
     LParen,
     RParen,
     Star,
     Plus,
+    EmptyProduct,
     Alternative,
+    PrecedencedAlternative,
 }
 
 impl TraceToken {
-    pub fn as_str(&self) -> Cow<str> {
+    pub fn as_str(&self, fragment_names: &BTreeMap<FragmentId, String>) -> Cow<str> {
         match self {
             &TraceToken::LParen => Cow::Borrowed("("),
             &TraceToken::RParen => Cow::Borrowed(")"),
             &TraceToken::Star => Cow::Borrowed("*"),
             &TraceToken::Plus => Cow::Borrowed("+"),
+            &TraceToken::EmptyProduct => Cow::Borrowed("()"),
             &TraceToken::Alternative => Cow::Borrowed("|"),
-            &TraceToken::Name(name) => Cow::Owned(name.as_str().to_string()),
-            &TraceToken::String(name) => Cow::Owned(name.as_str().to_string()),
+            &TraceToken::PrecedencedAlternative => Cow::Borrowed("|>"),
+            &TraceToken::String(ref name) => Cow::Owned(name.as_str().to_string()),
+
+            &TraceToken::Fragment(fragment_id) => {
+                Cow::Owned(fragment_names[&fragment_id].clone())
+            },
         }
     }
 }
@@ -50,84 +51,103 @@ impl TraceToken {
 impl Trace {
     pub fn from_stmts(stmts: &Stmts) -> Self {
         let mut trace = Trace {
-            stmts: vec![]
+            tokens: BTreeMap::new(),
         };
-        for stmt in &stmts.stmts {
-            trace.transform_stmt(stmt);
-        }
+        trace.flatten_stmts(stmts);
         trace
     }
 
-    fn transform_stmt(&mut self, stmt: &Stmt) {
-        for level in &stmt.rhs {
-            for &(ref rhs, _) in level {
-                self.transform_rhs(stmt.lhs.node, rhs);
+    fn flatten_stmts(&mut self, stmts: &Stmts) {
+        for (stmt_idx, stmt) in stmts.stmts.iter().enumerate() {
+            let mut last_level = None;
+            for (alternative_idx, (level, ref rhs, ref _action)) in stmt.body.iter().enumerate() {
+                let path = Path {
+                    position: vec![
+                        Position::IdxWithFragment {
+                            idx: stmt_idx,
+                            fragment: stmt.lhs,
+                        },
+                        Position::Alternative(alternative_idx),
+                    ],
+                };
+                if alternative_idx != 0 {
+                    let token = if last_level.is_none() || last_level == Some(level) {
+                        TraceToken::Alternative
+                    } else {
+                        TraceToken::PrecedencedAlternative
+                    };
+                    self.tokens.insert(path.clone(), token);
+                }
+                last_level = Some(level);
+                self.flatten_rhs(path, rhs);
             }
         }
     }
 
-
-    fn transform_rhs(&mut self, lhs: rs::Ident, rhs: &Rhs) {
-        let mut visitor = TraceRhs::new();
-        visitor.visit_rhs(rhs);
-        self.stmts.push(TraceStmt {
-            lhs: lhs,
-            rhs: visitor.rhs,
-        });
-    }
-
-    pub fn stmts(&self) -> &[TraceStmt] {
-        &self.stmts[..]
-    }
-}
-
-// The behavior can be modified to show levels of precedenced rules.
-// Currently, only single BNF rules appear in the trace.
-
-struct TraceRhs {
-    rhs: Vec<TraceToken>,
-}
-
-impl TraceRhs {
-    pub fn new() -> Self {
-        TraceRhs {
-            // Rule location is equivalent to an index into `rhs`.
-            rhs: vec![],
+    fn flatten_rhs(&mut self, path: Path, rhs: &Rhs) {
+        for (rhs_idx, element) in rhs.0.iter().enumerate() {
+            let mut path = path.clone();
+            match &element.elem {
+                &RhsAst::Fragment(fragment_id) => {
+                    path.position.push(Position::IdxWithFragment {
+                        idx: rhs_idx,
+                        fragment: fragment_id,
+                    });
+                    self.tokens.insert(path, TraceToken::Fragment(fragment_id));
+                }
+                &RhsAst::Sequence(ref sequence) => {
+                    path.position.push(Position::Idx(rhs_idx));
+                    path.position.push(Position::Sequence {
+                        min: sequence.min,
+                        max: sequence.max,
+                    });
+                    let mut star_or_plus_path = path.clone();
+                    star_or_plus_path.position.push(Position::SequenceToken);
+                    if sequence.min == 0 && sequence.max == None {
+                        self.tokens.insert(star_or_plus_path, TraceToken::Star);
+                    } else if sequence.min == 1 && sequence.max == None {
+                        self.tokens.insert(star_or_plus_path, TraceToken::Plus);                        
+                    }
+                    self.flatten_rhs(path, &sequence.rhs);
+                }
+                &RhsAst::Sum(ref summands) => {
+                    path.position.push(Position::Idx(rhs_idx));
+                    if summands.is_empty() {
+                        self.tokens.insert(path.clone(), TraceToken::EmptyProduct);
+                    }
+                    for (summand_idx, summand) in summands.iter().enumerate() {
+                        let mut path = path.clone();
+                        path.position.push(Position::Alternative(summand_idx));
+                        if summand_idx != 0 {
+                            self.tokens.insert(path.clone(), TraceToken::Alternative);
+                        }
+                        self.flatten_rhs(path, summand);
+                    }
+                }
+                &RhsAst::Product(ref rhs) => {
+                    path.position.push(Position::Idx(rhs_idx));
+                    let mut left_paren_path = path.clone();
+                    let mut right_paren_path = path.clone();
+                    left_paren_path.position.push(Position::Idx(0));
+                    right_paren_path.position.push(Position::Idx(1));
+                    self.tokens.insert(left_paren_path, TraceToken::LParen);
+                    self.tokens.insert(right_paren_path, TraceToken::RParen);
+                    self.flatten_rhs(path, rhs);
+                }
+            }
+        }
+        if rhs.0.is_empty() {
+            self.tokens.insert(path, TraceToken::EmptyProduct);
         }
     }
-}
 
-impl RhsAstVisitor for TraceRhs {
-    fn visit_rhs_symbol(&mut self, symbol: Name) {
-        self.rhs.push(TraceToken::Name(symbol.node));
+    pub fn traces_for_path(&self, path: &Path) -> (usize, usize) {
+        let mut max_path = path.clone();
+        max_path.position.push(Position::Max);
+        (self.tokens.range(.. path).count(), self.tokens.range(.. max_path).count())
     }
 
-    fn visit_sequence(&mut self, sequence: &ast::Sequence) {
-        self.walk_sequence(sequence);
-        if sequence.min == 0 {
-            self.rhs.push(TraceToken::Star);
-        } else if sequence.min == 1 {
-            self.rhs.push(TraceToken::Plus);
-        }
-    }
-
-    fn visit_sum(&mut self, sum: &[Rhs]) {
-        for rule in sum {
-            self.visit_rhs(rule);
-            self.rhs.push(TraceToken::Alternative);
-        }
-        if !sum.is_empty() {
-            self.rhs.pop();
-        }
-    }
-
-    fn visit_product(&mut self, product: &Rhs) {
-        self.rhs.push(TraceToken::LParen);
-        self.walk_product(product);
-        self.rhs.push(TraceToken::RParen);
-    }
-
-    fn visit_rhs_string(&mut self, string: Name) {
-        self.rhs.push(TraceToken::String(string.node));
+    pub fn tokens(&self) -> &BTreeMap<Path, TraceToken> {
+        &self.tokens
     }
 }

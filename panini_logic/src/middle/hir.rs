@@ -50,11 +50,8 @@ impl Hir<SymbolicName> {
 
         let mut levels_bnf_rules = vec![];
         let mut local_rhs_counter = *rhs_counter;
-        for level in &stmt.body {
-            let mut bnf_rules_for_level = vec![];
-            for &(ref rhs, ref action) in level {
-                let rule = self.transform_rhs(stmt.lhs, rhs, local_rhs_counter);
-                local_rhs_counter += 1;
+        for &(level, ref rhs, ref action) in &stmt.body {
+            let rule = self.transform_rhs(stmt.lhs, rhs);
 
                 let (action, ty) = if let Some(ref inline_action) = action.expr {
                     self.type_map.entry(rule.lhs.node).or_insert(Ty::Infer);
@@ -145,7 +142,7 @@ impl Hir<SymbolicName> {
             } else {
                 self.type_map.insert(new_rule.lhs.node, new_auto_ty);
             }
-            self.rules.push(Rule::BnfRule {
+            self.rules.push(Rule {
                 lhs: new_rule.lhs,
                 properties: new_rule.properties,
                 source_origin: new_rule.source_origin,
