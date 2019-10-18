@@ -30,7 +30,7 @@ extern crate maplit;
 pub mod middle;
 // pub mod back;
 pub mod input;
-// pub mod output;
+pub mod output;
 
 // pub use front::lexer;
 

@@ -2,15 +2,12 @@
 
 use cfg::Symbol;
 
-// use rs;
-
-use middle::attr::Attrs;
-use middle::rule::BasicRule;
-// use middle::lint::*;
+use input::attr_arguments::AttrArguments;
+use middle::rule_rewrite::RuleValue;
 
 pub struct WarningsWithContext<'a> {
-    pub attrs: &'a Attrs<Symbol>,
-    pub basic_rules: &'a [BasicRule],
+    pub attrs: &'a AttrArguments,
+    pub rules: &'a [RuleValue],
     pub causes: &'a WarningCauses,
 }
 

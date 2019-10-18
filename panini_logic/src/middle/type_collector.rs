@@ -1,7 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
+use cfg::Symbol;
+
 use input::FragmentId;
+use middle::trace::Trace;
 use middle::flatten_stmts::{Path, Position};
 
 pub struct TypeCollector {
@@ -13,6 +16,26 @@ pub struct TypeCollector {
 pub struct PathWithType {
     path: Path,
     ty: Type,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Type {
+    Tuple {
+        fields: BTreeMap<usize, Type>,
+    },
+    Struct {
+        fields: BTreeMap<Path, Type>,
+    },
+    Sequence {
+        ty: Box<Type>,
+    },
+    TypeOfFragment {
+        fragment: FragmentId,
+    },
+    // TypeOfSymbol {
+    //     symbol: Symbol,
+    // },
+    Bottom,
 }
 
 impl Ord for PathWithType {
@@ -40,31 +63,59 @@ impl TypeCollector {
         self.queue.extend(paths.into_iter().map(|path| PathWithType { path, ty: Type::Bottom }));
 
         while let Some(path_with_type) = self.queue.pop() {
+            let full_path = path_with_type.path.clone();
             let (&last_position, prefix_path_a) = path_with_type.path.split_last();
             let prefix_path = prefix_path_a.clone();
-            println!("collect prefix => {:#?}, last => {:#?}, ty => {:#?}", prefix_path, last_position, path_with_type.ty);
             let ty = match (last_position, path_with_type.ty) {
                 (Position::IdxWithFragment { idx, fragment }, Type::Bottom) => {
-                    let fields = btreemap! { idx => Type::TypeOfFragment { fragment } };
-                    let ty = Type::Tuple { fields };
+                    let ty = if let Some(&Position::Bind(..)) = prefix_path.position.last() {
+                        Type::TypeOfFragment { fragment }
+                    } else {
+                        let fields = btreemap! { idx => Type::TypeOfFragment { fragment } };
+                        Type::Tuple { fields }
+                    };
                     let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
                     Type::merge(entry, ty)
                 }
                 (Position::IdxWithFragment { .. }, ty) => {
                     // let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
                     // Type::merge(entry, ty)
+                    // let mut range_end = full_path.clone();
+                    // range_end.position.push(Position::Max);
+                    // for (path, set) in self.types.range_mut(full_path .. range_end) {
+                    //     for position in path.position.iter().skip(1) {
+                    //         match position {
+                    //             Position::Sequence { .. } => {
+                    //                 set.insert();
+                    //             }
+                    //         }
+                    //     }
+                    // }
+                    ty
+                }
+                (Position::StmtIdx(..), ty) => {
+                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
+                    let ty = Type::merge(entry, ty);
+                    ty
+                }
+                (Position::StmtFragment(..), ty) => {
                     ty
                 }
                 (Position::Alternative(_), ty) => {
                     // let ty = Type::Tuple { fields };
-                    println!("alternative {:#?}", self.types.get(&prefix_path));
                     let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
                     let ty = Type::merge(entry, ty);
-                    println!("alternative {:#?} {:#?}", entry, ty);
+                    // self.rules.entry()
                     ty
                 }
                 (Position::Sequence { min, max }, Type::Struct { fields }) => {
-                    let ty = Type::struct_with_position(fields, Position::Sequence { min, max });
+                    let ty = if let Some(&Position::Bind(..)) = prefix_path.position.last() {
+                        Type::Sequence {
+                            ty: Box::new(Type::Struct { fields })
+                        }
+                    } else {
+                        Type::struct_with_position(fields, Position::Sequence { min, max })
+                    };
                     let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
                     Type::merge(entry, ty)
                 }
@@ -93,15 +144,21 @@ impl TypeCollector {
                     let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
                     Type::merge(entry, ty)
                 }
-                (Position::SequenceToken, _) | (Position::Max, _) => unreachable!()
+                (Position::SequenceEnd, _)
+                    | (Position::SequenceToken, _)
+                    | (Position::Max, _) => unreachable!()
             };
+            // let new_rule = RuleValue {
+            //     rhs: btreemap! {},
+            //     sequence: None,
+            //     traces: btreemap! {},
+            // };
             if prefix_path_a.position.len() > 0 {
                 if self.queue.iter().all(|elem| {
                     let (_, prefix) = elem.path.position.split_last().unwrap();
                     let prefix_path_b = Path { position: prefix.to_vec() };
                     prefix_path_b != prefix_path_a
                 }) {
-                    println!("queue => {:#?}; new prefix => {:#?}, ty => {:#?}", self.queue, prefix_path_a, ty);
                     self.queue.push(PathWithType {
                         path: prefix_path_a.clone(),
                         ty: ty,
@@ -120,23 +177,62 @@ impl TypeCollector {
             *ty_set = tys.into_iter().collect();
         }
     }
-}
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Type {
-    Tuple {
-        fields: BTreeMap<usize, Type>,
-    },
-    Struct {
-        fields: BTreeMap<Path, Type>,
-    },
-    Sequence {
-        ty: Box<Type>,
-    },
-    TypeOfFragment {
-        fragment: FragmentId,
-    },
-    Bottom,
+    pub fn check_type_equality(&self, trace: &Trace) -> Option<Vec<Vec<(usize, usize)>>> {
+        let mut all_spans = vec![];
+        for (path, ty_set) in &self.types {
+            if ty_set.len() > 1 {
+                let mut spans = vec![];
+                for ty in ty_set {
+                    let mut paths = vec![path.clone()];
+                    let path_range = path.clone().range();
+                    for (path, ty_set) in self.types.range(path_range) {
+                        if ty_set.contains(ty) {
+                            paths.push(path.clone());
+                        }
+                    }
+                    let mut longest_path = paths.into_iter().max_by_key(|path| path.position.len()).unwrap();
+                    let mut longest_path_range = longest_path.clone().range();
+                    longest_path_range.start.position.push(Position::Alternative(!0));
+                    longest_path.position.push(Position::Alternative(!0));
+                    let start = trace.tokens.range(.. longest_path).count();
+                    let end = start + trace.tokens.range(longest_path_range.clone()).count();
+                    spans.push((start, end));
+                }
+                all_spans.push(spans);
+            }
+        }
+        if all_spans.is_empty() {
+            None
+        } else {
+            Some(all_spans)
+        }
+    }
+
+    // pub fn add_lhs(&mut self, grammar: &mut Grammar, sym_map: &mut SymMap, rules: &RuleRewriteResult) {
+    //     for (ref path, ref rule_value) in rules.rules {
+    //         let value = self.types.entry(path.clone).or_insert(BTreeSet::new());
+    //         let symbol = sym_map.intern(grammar, &rule_value.lhs);
+    //         value.insert(Type::TypeOfSymbol { symbol });
+    //     }
+    // }
+
+    // fn rewrite_rules(&mut self) {
+    //     for (path, ty_set) in &self.types {
+    //         if ty_set.len() != 1 {
+    //             continue;
+    //         }
+    //         let ty = ty_set.iter().next();
+    //         match (path.last().cloned().unwrap(), ty) {
+    //             (Position::IdxWithFragment { .. }, &Type::Sequence { .. }) => {}
+    //             (Position::Sequence { min, max }, Type::TypeOfFragment { fragment }) => {
+    //                 self.rules.push(RuleValue {
+
+    //                 })
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 impl Type {
@@ -206,7 +302,13 @@ impl Type {
                             queue.push(Type::Tuple { fields: fields_a });
                         }
                     }
-                    [Type::Tuple { .. }, type_b] | [type_b, Type::Tuple { .. }] => {
+                    [Type::Tuple { .. }, type_b @ Type::Struct { .. }]
+                    | [type_b @ Type::Struct { .. }, Type::Tuple { .. }] => {
+                        result.insert(type_b.clone());
+                        queue.push(type_b);
+                    }
+                    [type_a @ Type::Tuple { .. }, type_b] | [type_b, type_a @ Type::Tuple { .. }] => {
+                        result.insert(type_a);
                         result.insert(type_b.clone());
                         queue.push(type_b);
                     }

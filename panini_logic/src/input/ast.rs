@@ -1,8 +1,9 @@
-use input::{AttrId, TyId, LexerId, BindId, FragmentId, ExprId};
+use input::{AttrId, TyId, LexerId, BindId, FragmentId, ExprId, SpanId};
+use input::attr_arguments::AttrArguments;
 
 #[derive(Clone, Debug)]
 pub struct Stmts {
-    pub attrs: Vec<AttrId>,
+    pub attr_arguments: AttrArguments,
     pub stmts: Vec<Stmt>,
     pub lexer: Option<LexerId>,
 }
@@ -23,7 +24,7 @@ pub struct Rhs(pub Vec<RhsElement>);
 
 #[derive(Clone, Debug)]
 pub struct Action {
-    pub expr: Expr,
+    pub expr: Option<ExprId>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +38,7 @@ pub type Bind = Option<BindId>;
 #[derive(Clone, Debug)]
 pub enum RhsAst {
     Fragment(FragmentId),
+    String(String),
     Sequence(Sequence),
     Sum(Vec<Rhs>),
     Product(Rhs),
@@ -48,5 +50,3 @@ pub struct Sequence {
     pub min: u32,
     pub max: Option<u32>,
 }
-
-pub type Expr = Option<ExprId>;

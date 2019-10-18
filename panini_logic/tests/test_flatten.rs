@@ -9,16 +9,19 @@ mod support;
 use cfg::Cfg;
 
 use panini_logic::input::{Stmts, Stmt, RhsAst, Rhs, RhsElement, Action, Sequence};
+use panini_logic::input::attr_arguments::AttrArguments;
 use panini_logic::middle::flatten_stmts::{FlattenStmts, Path, Position};
 use panini_logic::middle::trace::{Trace, TraceToken};
-use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleKey, RuleValue};
+use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleValue};
 use panini_logic::middle::type_collector::{TypeCollector, Type};
 
 #[test]
-fn test_fragments() {
+fn test_flatten() {
     let (start, a, b) = (0, 1, 2);
     let stmts = Stmts {
-        attrs: vec![],
+        attr_arguments: AttrArguments {
+            lexer_arguments: None,
+        },
         stmts: vec![
             // start ::= a b;
             Stmt {
@@ -84,7 +87,6 @@ fn test_fragments() {
                     idx: 0,
                     fragment: start,
                 },
-                Position::Alternative(0),
                 Position::IdxWithFragment {
                     idx: 0,
                     fragment: a,
@@ -97,7 +99,6 @@ fn test_fragments() {
                     idx: 0,
                     fragment: start,
                 },
-                Position::Alternative(0),
                 Position::IdxWithFragment {
                     idx: 1,
                     fragment: b,
@@ -110,8 +111,6 @@ fn test_fragments() {
                     idx: 1,
                     fragment: a,
                 },
-                Position::Alternative(0),
-                Position::Idx(0),
                 Position::Sequence { min: 0, max: None },
                 Position::IdxWithFragment {
                     idx: 0,
@@ -123,27 +122,23 @@ fn test_fragments() {
     assert_eq!(flatten.paths, expected_paths);
 
     // Trace
-    let trace = Trace::from_stmts(&stmts);
+    let mut trace = Trace::from_stmts(&stmts);
     let expected_tokens = btreemap! {
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
-                Position::Alternative(0),
                 Position::IdxWithFragment { idx: 0, fragment: 1 }
             ]
         } => TraceToken::Fragment(1),
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
-                Position::Alternative(0),
                 Position::IdxWithFragment { idx: 1, fragment: 2 }
             ]
         } => TraceToken::Fragment(2),
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 1, fragment: 1 },
-                Position::Alternative(0),
-                Position::Idx(0),
                 Position::Sequence { min: 0, max: None },
                 Position::IdxWithFragment { idx: 0, fragment: 2 }
             ]
@@ -151,8 +146,6 @@ fn test_fragments() {
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 1, fragment: 1 },
-                Position::Alternative(0),
-                Position::Idx(0),
                 Position::Sequence { min: 0, max: None },
                 Position::SequenceToken
             ]
@@ -163,46 +156,26 @@ fn test_fragments() {
     // Rule rewrite
     let mut cfg: Cfg = Cfg::new();
     let (_start_sym, _a_sym, _b_sym) = cfg.sym();
-    let mut rewrite = RuleRewrite::new(cfg, &trace);
+    let mut rewrite = RuleRewrite::new(&mut trace);
     rewrite.rewrite(expected_paths);
     let expected_rules = btreemap! {
-        RuleKey {
-            lhs: Sym::Fragment(start),
-            path: Path {
-                position: vec![
-                    Position::IdxWithFragment { idx: 0, fragment: start },
-                    Position::Alternative(0),
-                ]
-            }
+        Path {
+            position: vec![
+                Position::IdxWithFragment { idx: 0, fragment: start },
+            ]
         } => RuleValue {
+            lhs: Sym::Fragment(start),
             rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
             sequence: None,
             traces: btreemap! { Some(0) => 0, Some(1) => 1, Some(2) => 2 },
         },
-        RuleKey {
+        Path {
+            position: vec![
+                Position::IdxWithFragment { idx: 1, fragment: a },
+                Position::Sequence { min: 0, max: None }
+            ]
+        } => RuleValue {
             lhs: Sym::Fragment(a),
-            path: Path {
-                position: vec![
-                    Position::IdxWithFragment { idx: 1, fragment: 1 },
-                    Position::Alternative(0)
-                ]
-            }
-        } => RuleValue {
-            rhs: btreemap! { 0 => Sym::Symbol(3u32.into()) },
-            sequence: None,
-            traces: btreemap! {},
-        },
-        RuleKey {
-            lhs: Sym::Symbol(3u32.into()),
-            path: Path {
-                position: vec![
-                    Position::IdxWithFragment { idx: 1, fragment: 1 },
-                    Position::Alternative(0),
-                    Position::Idx(0),
-                    Position::Sequence { min: 0, max: None }
-                ]
-            }
-        } => RuleValue {
             rhs: btreemap! { 0 => Sym::Fragment(b) },
             sequence: Some((0, None)),
             traces: btreemap! { Some(0) => 2, Some(1) => 3, None => 4 },
@@ -226,19 +199,6 @@ fn test_fragments() {
         },
         Path {
             position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: 0 },
-                Position::Alternative(0),
-            ]
-        } => btreeset! {
-            Type::Tuple {
-                fields: btreemap! {
-                    0 => Type::TypeOfFragment { fragment: 1 },
-                    1 => Type::TypeOfFragment { fragment: 2 }
-                }
-            }
-        },
-        Path {
-            position: vec![
                 Position::IdxWithFragment { idx: 1, fragment: 1 }
             ]
         } => btreeset! {
@@ -249,29 +209,6 @@ fn test_fragments() {
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 1, fragment: 1 },
-                Position::Alternative(0)
-            ]
-        } => btreeset! {
-            Type::Sequence {
-                ty: Box::new(Type::TypeOfFragment { fragment: 2 }),
-            }
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 1, fragment: 1 },
-                Position::Alternative(0),
-                Position::Idx(0),
-            ]
-        } => btreeset! {
-            Type::Sequence {
-                ty: Box::new(Type::TypeOfFragment { fragment: 2 }),
-            }
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 1, fragment: 1 },
-                Position::Alternative(0),
-                Position::Idx(0),
                 Position::Sequence { min: 0, max: None },
             ]
         } => btreeset! {

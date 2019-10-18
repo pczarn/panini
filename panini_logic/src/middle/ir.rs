@@ -1,25 +1,26 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap, BTreeSet};
 use std::cmp::Ordering;
 use std::mem;
 use std::iter;
 
 use bit_matrix::BitMatrix;
 use gearley::grammar::{Grammar, BinarizedGrammar, History};
-use cfg::cycles::Cycles;
+use cfg::classification::cyclical::Cycles;
 use cfg::remap::{Remap, Mapping};
 use cfg::rule::RuleRef;
 use cfg::rule::container::RuleContainer;
-use cfg::usefulness::Usefulness;
+use cfg::classification::useful::Usefulness;
 use cfg::*;
-use cfg_regex::{RegexTranslation, ClassRange};
+use cfg_regex::{RegexTranslation, Class};
 
-use input::ast;
-use middle::{ActionExpr, Ty, Lexer, Hir, Folder, FoldHir, AutoTy, SymbolicName};
+use input::{ast, LEXER_START_FRAGMENT, LexerId, FragmentId};
+use input::attr_arguments::AttrArguments;
 use middle::error::{TransformationError, CycleWithCauses};
-use middle::trace::{Trace, SourceOrigin};
-use middle::attr::{Attrs, ArgumentsFromOuterLayer};
+use middle::trace::Trace;
+use middle::rule_rewrite::{RuleValue, Rule, Sym, RuleRewrite, LowerRuleRewriteResult, RuleRewriteResult};
+use middle::flatten_stmts::{FlattenStmts, Path, Position};
+use middle::type_collector::{Type, TypeCollector};
 use middle::warn::{WarningCauses, WarningsWithContext};
-use middle::rule::{Rule, BasicRule};
 use middle::embedded_string::EmbeddedString;
 
 pub struct Ir {
@@ -27,52 +28,72 @@ pub struct Ir {
     pub nulling_grammar: BinarizedGrammar,
     pub trivial_derivation: bool,
     // for actions, accessed by action ID.
-    pub basic_rules: Vec<BasicRule>,
-    pub type_map: HashMap<Symbol, Ty>,
+    pub rules: LowerRuleRewriteResult,
+    pub type_map: BTreeMap<Path, BTreeSet<Type>>,
     pub maps: InternalExternalNameMap,
-    pub assert_type_equality: Vec<(Symbol, Ty)>,
-    // what the heck is LexerForUpper?
-    pub arguments_from_outer_layer: Option<ArgumentsFromOuterLayer<Symbol>>,
-    pub invocation_of_inner_layer: InvocationOfInnerLayer,
-    pub trace_tokens: Vec<Vec<String>>,
-    pub trace_sources: Vec<SourceOrigin>,
+    // pub assert_type_equality: Vec<(Symbol, Type)>,
+    pub attr_arguments: AttrArguments,
+    pub lexer_layer: LexerLayer,
+    pub trace: Trace,
+    pub errors: Vec<TransformationError>,
 }
 
 #[derive(Clone)]
-pub struct NameMap {
-    pub sym_map: HashMap<SymbolicName, Symbol>,
-    pub sym_vec: Vec<Option<SymbolicName>>,
+pub struct SymMap {
+    pub sym_map: HashMap<Sym, Symbol>,
+    pub sym_vec: Vec<Option<Sym>>,
 }
 
 pub struct InternalExternalNameMap {
     internal_external: Mapping,
-    name_map: NameMap,
+    sym_map: SymMap,
 }
 
-impl NameMap {
-    fn insert_padded(&mut self, sym: Symbol, name: SymbolicName) {
-        if self.sym_vec.len() <= sym.usize() {
-            let pad_len = sym.usize() - self.sym_vec.len() + 1;
+impl SymMap {
+    fn new() -> Self {
+        SymMap {
+            sym_map: HashMap::new(),
+            sym_vec: vec![],
+        }
+    }
+
+    pub fn intern(&mut self, grammar: &mut Grammar, internal_sym: &Sym) -> Symbol {
+        if let Some(&symbol) = self.sym_map.get(internal_sym) {
+            symbol
+        } else {
+            let new_sym: Symbol = grammar.sym();
+            self.insert(new_sym, internal_sym.clone());
+            new_sym
+        }
+    }
+
+    fn insert(&mut self, sym: Symbol, internal_sym: Sym) {
+        self.insert_padding(sym);
+        self.sym_vec[sym.usize()] = Some(internal_sym.clone());
+        self.sym_map.insert(internal_sym, sym);
+    }
+
+    fn insert_padding(&mut self, symbol: Symbol) {
+        if self.sym_vec.len() <= symbol.usize() {
+            let pad_len = symbol.usize() - self.sym_vec.len() + 1;
             self.sym_vec.extend(iter::repeat(None).take(pad_len));
         }
-        self.sym_vec[sym.usize()] = Some(name);
-        self.sym_map.insert(name, sym);
     }
 
-    fn to_name(&self, sym: Symbol) -> Option<SymbolicName> {
-        self.sym_vec.get(sym.usize()).and_then(|opt| *opt)
+    fn get(&self, sym: Symbol) -> Option<Sym> {
+        self.sym_vec.get(sym.usize()).and_then(|s| s.clone())
     }
 
-    pub fn names(&self) -> &[Option<SymbolicName>] {
+    pub fn syms(&self) -> &[Option<Sym>] {
         &self.sym_vec[..]
     }
 }
 
 impl InternalExternalNameMap {
-    fn new(internal_external: Mapping, name_map: NameMap) -> Self {
+    fn new(internal_external: Mapping, sym_map: SymMap) -> Self {
         InternalExternalNameMap {
             internal_external: internal_external,
-            name_map: name_map,
+            sym_map,
         }
     }
 
@@ -84,12 +105,12 @@ impl InternalExternalNameMap {
         self.internal_external.to_external[sym.usize()]
     }
 
-    pub fn name_of_external(&self, sym: Symbol) -> Option<SymbolicName> {
-        self.name_map.to_name(sym)
+    pub fn sym_of_external(&self, sym: Symbol) -> Option<Sym> {
+        self.sym_map.get(sym)
     }
 
-    fn name_map(&self) -> &NameMap {
-        &self.name_map
+    fn sym_map(&self) -> &SymMap {
+        &self.sym_map
     }
 }
 
@@ -97,42 +118,42 @@ impl InternalExternalNameMap {
 /// is either a sub-grammar described by the grammar author, or an implicit invocation of
 /// a character classifier.
 #[derive(Debug)]
-pub enum InvocationOfInnerLayer {
+pub enum LexerLayer {
     Invoke {
-        lexer_invocation: Lexer,
-        embedded_strings: Vec<EmbeddedString>,
+        lexer_id: LexerId,
+        embedded_strings: Vec<String>,
     },
-    CharClassifier(Vec<(ClassRange, Symbol)>),
+    CharClassifier(Vec<(Class, Symbol)>),
     None
 }
 
-struct IrStmtsAndAttrs {
+struct IrStmts {
     stmts: ast::Stmts,
-    start: SymbolicName,
-    attrs: Attrs<SymbolicName>,
-    errors: Vec<TransformationError>,
+    start: FragmentId,
 }
 
-struct IrInitialHir {
-    hir_with_names: Hir<SymbolicName>,
-    start: SymbolicName,
-    attrs: Attrs<SymbolicName>,
+struct IrWithRules {
+    rules: RuleRewriteResult,
+    start: FragmentId,
+    attr_arguments: AttrArguments,
     errors: Vec<TransformationError>,
+    embedded_strings: Vec<String>, // TODO
     // Final
-    lower_level: InvocationOfInnerLayer,
-    trace_tokens: Vec<Vec<String>>,
+    type_collector: TypeCollector,
+    lexer_layer: LexerLayer,
+    trace: Trace,
 }
 
-struct IrFinalHir {
-    hir: Hir,
-    grammar: Grammar,
-    name_map: NameMap,
-    attrs: Attrs<Symbol>,
-    errors: Vec<TransformationError>,
-    // Final
-    lower_level: InvocationOfInnerLayer,
-    trace_tokens: Vec<Vec<String>>,
-}
+// struct IrFinalHir {
+//     rules: RuleRewriteResult,
+//     grammar: Grammar,
+//     sym_map: SymMap,
+//     attr_arguments: AttrArguments,
+//     errors: Vec<TransformationError>,
+//     // Final
+//     lexer_layer: LexerLayer,
+//     trace: Trace,
+// }
 
 struct IrPrepared {
     grammar: Grammar,
@@ -180,190 +201,183 @@ pub struct IrMapped {
 // Common
 
 struct CommonPrepared {
-    basic_rules: Vec<BasicRule>,
-    attrs: Attrs<Symbol>,
-    lower_level: InvocationOfInnerLayer,
-    trace_tokens: Vec<Vec<String>>,
-    trace_sources: Vec<SourceOrigin>,
-    name_map: NameMap,
-    hir: Hir,
+    rules: LowerRuleRewriteResult,
+    attr_arguments: AttrArguments,
     errors: Vec<TransformationError>,
+    trace: Trace,
+    lexer_layer: LexerLayer,
+    sym_map: SymMap,
+    type_map: BTreeMap<Path, BTreeSet<Type>>,
 }
 
-impl IrStmtsAndAttrs {
-    fn compute(mut stmts: ast::Stmts, attrs: Attrs<SymbolicName>) -> Result<Self, TransformationError> {
+impl IrStmts {
+    fn compute(mut stmts: ast::Stmts) -> Result<Self, TransformationError> {
         // Obtain the explicit start.
         let start = if let Some(first_stmt) = stmts.stmts.get(0) {
-            first_stmt.lhs.node
+            first_stmt.lhs
         } else {
             return Err(TransformationError::GrammarIsEmpty);
         };
 
-        if let &Some(ref from_outer) = attrs.arguments_from_outer_layer() {
+        if let Some(ref lexer_arguments) = stmts.attr_arguments.lexer_arguments {
             // Set the implicit start.
-            let start = rs::Term::intern("_lower_start_");
-            for terminal in from_outer.terminals() {
+            for &terminal in &lexer_arguments.terminals {
                 let lower_start_stmt = ast::Stmt {
-                    lhs: rs::dummy_spanned(start),
-                    rhs: vec![
-                        vec![(
+                    lhs: LEXER_START_FRAGMENT,
+                    body: vec![
+                        (
+                            0,
                             ast::Rhs(vec![
                                 ast::RhsElement {
                                     bind: None,
-                                    elem: ast::RhsAst::Symbol(rs::dummy_spanned(*terminal))
+                                    elem: ast::RhsAst::Fragment(terminal)
                                 }
                             ]),
                             ast::Action { expr: None }
-                        )]
+                        )
                     ],
                     ty: None,
-                    span: rs::Span::call_site(),
                 };
                 stmts.stmts.push(lower_start_stmt);
             }
         }
 
-        Ok(IrStmtsAndAttrs {
-            stmts: stmts,
-            start: start,
-            attrs: attrs,
-            errors: vec![],
+        Ok(IrStmts {
+            stmts,
+            start,
         })
     }
 }
 
-impl IrInitialHir {
-    fn compute(ir: IrStmtsAndAttrs) -> Result<Self, TransformationError> {
-        let mut hir_with_names = Hir::transform_stmts(&ir.stmts);
-        let mut errors = ir.errors;
+impl IrWithRules {
+    fn compute(ir: IrStmts) -> Result<Self, TransformationError> {
+        let mut trace = Trace::from_stmts(&ir.stmts);
+        let (rules, type_collector) = {
+            let mut rule_rewrite = RuleRewrite::new(&mut trace);
+            let mut flatten = FlattenStmts::new();
+            flatten.flatten_stmts(&ir.stmts);
+            rule_rewrite.rewrite(flatten.paths.clone());
+            let mut type_collector = TypeCollector::new();
+            type_collector.collect(flatten.join_stmts());
+            type_collector.simplify_tuples();
+            (rule_rewrite.result(), type_collector)
+        };
 
-        if !hir_with_names.check_type_equality() {
-            errors.push(TransformationError::TypeMismatch);
+        let mut errors = vec![];
+        if let Some(inequalities) = type_collector.check_type_equality(&trace) {
+            errors.extend(inequalities.into_iter().map(|spans|
+                TransformationError::TypeMismatch(spans)
+            ));
         }
 
-        let trace = Trace::from_stmts(&ir.stmts);
-        let trace_tokens = trace.stmts().iter().map(|stmt| {
-            let mut rule_tokens = vec![];
-            rule_tokens.push(stmt.lhs.as_str().to_string());
-            for token in &stmt.rhs {
-                rule_tokens.push(token.as_str().to_string());
-            }
-            rule_tokens
-        }).collect();
-
-        let lower_level = if let Some(lexer_invocation) = ir.stmts.lexer {
-            InvocationOfInnerLayer::Invoke {
-                lexer_invocation: lexer_invocation,
+        let lexer_layer = if let Some(lexer_id) = ir.stmts.lexer {
+            LexerLayer::Invoke {
+                lexer_id,
                 embedded_strings: vec![]
             }
         } else {
-            InvocationOfInnerLayer::None
+            LexerLayer::None
         };
 
-        Ok(IrInitialHir {
-            hir_with_names: hir_with_names,
+        Ok(IrWithRules {
+            rules,
             start: ir.start,
-            trace_tokens: trace_tokens,
-            lower_level: lower_level,
-            attrs: ir.attrs,
-            errors: errors,
+            trace,
+            lexer_layer,
+            attr_arguments: ir.stmts.attr_arguments,
+            embedded_strings: vec![],
+            errors,
+            type_collector,
         })
     }
 }
 
-impl IrFinalHir {
-    fn compute(ir: IrInitialHir) -> Self {
-        let mut grammar = Grammar::new();
-        let (hir, sym_map, sym_vec) = {
-            let mut fold = Folder::new(grammar.sym_source_mut());
-            let hir = fold.fold_hir(ir.hir_with_names);
-            (hir, fold.sym_map, fold.sym_vec)
-        };
-        let attrs = ir.attrs.map_symbols(|name| sym_map[&name]);
-        grammar.set_start(sym_map[&ir.start]);
-        IrFinalHir {
-            hir: hir,
-            grammar: grammar,
-            name_map: NameMap {
-                sym_map: sym_map,
-                sym_vec: sym_vec,
-            },
-            attrs: attrs,
-            errors: ir.errors,
-            lower_level: ir.lower_level,
-            trace_tokens: ir.trace_tokens,
-        }
-    }
-}
+// impl IrFinalHir {
+//     fn compute(ir: IrInitialHir) -> Self {
+//         let mut grammar = Grammar::new();
+//         let (hir, sym_map, sym_vec) = {
+//             let mut fold = Folder::new(grammar.sym_source_mut());
+//             let hir = fold.fold_hir(ir.hir_with_names);
+//             (hir, fold.sym_map, fold.sym_vec)
+//         };
+//         // let attrs = ir.attrs.map_symbols(|name| sym_map[&name]);
+//         grammar.set_start(sym_map[&ir.start]);
+//         IrFinalHir {
+//             hir: hir,
+//             grammar: grammar,
+//             name_map: NameMap {
+//                 sym_map: sym_map,
+//                 sym_vec: sym_vec,
+//             },
+//             attrs: attrs,
+//             errors: ir.errors,
+//             lower_level: ir.lower_level,
+//             trace_tokens: ir.trace_tokens,
+//         }
+//     }
+// }
 
 impl IrPrepared {
-    fn compute(mut ir: IrFinalHir) -> Self {
-        let IrFinalHir { mut hir, mut grammar, .. } = ir;
-        let embedded_strings = hir.embedded_strings.clone();
-        let lower_level = if !hir.embedded_strings.is_empty() {
-            match ir.lower_level {
-                InvocationOfInnerLayer::Invoke { lexer_invocation, .. } => {
+    fn compute(mut ir: IrWithRules) -> Self {
+        let mut grammar = Grammar::new();
+        let mut sym_map = SymMap::new();
+        let embedded_strings = ir.embedded_strings.clone();
+        let lexer_layer = if !ir.embedded_strings.is_empty() {
+            match ir.lexer_layer {
+                LexerLayer::Invoke { lexer_id, .. } => {
                     // Add strings to the lower level.
-                    InvocationOfInnerLayer::Invoke {
+                    LexerLayer::Invoke {
                         embedded_strings: embedded_strings,
-                        lexer_invocation: lexer_invocation,
+                        lexer_id: lexer_id,
                     }
                 }
-                InvocationOfInnerLayer::None => {
-                    if ir.attrs.arguments_from_outer_layer().is_some() {
-                        // We are at level 1 .. N and adding strings to the current level.
-                        // Embedded strings are rewritten into rules. Character ranges are
-                        // collected.
-                        let mut regex_rewrite = RegexTranslation::new();
-                        for embedded in embedded_strings {
-                            let sym2 = regex_rewrite.rewrite_string(
-                                &mut grammar,
-                                &*embedded.string.node.as_str()
-                            );
-                            hir.rules.push(Rule {
-                                lhs: embedded.symbol,
-                                properties: RuleProperties {
-                                    rhs: vec![rs::dummy_spanned(sym2)],
-                                    tuple_binds: vec![],
-                                    deep_binds: vec![],
-                                    shallow_binds: vec![],
-                                },
-                                source_origin: embedded.source,
-                                action: ActionExpr::Auto,
-                            });
-                            hir.type_map.insert(
-                                embedded.symbol.node,
-                                Ty::Auto(AutoTy::Tuple { fields: vec![] })
-                            );
-                        }
-                        let char_ranges = regex_rewrite.get_ranges().clone().into_iter()
-                                                                            .collect::<Vec<_>>();
-                        for (i, &(_, sym)) in char_ranges.iter().enumerate() {
-                            let name = rs::Term::intern(&*format!("ChRange{}", i));
-                            ir.name_map.insert_padded(sym, name);
-                        }
-                        InvocationOfInnerLayer::CharClassifier(char_ranges)
+                LexerLayer::None => {
+                    if ir.attr_arguments.lexer_arguments.is_some() {
+                        // // We are at level 1 .. N and adding strings to the current level.
+                        // // Embedded strings are rewritten into rules. Character ranges are
+                        // // collected.
+                        // let mut regex_rewrite = RegexTranslation::new(&mut grammar);
+                        // for embedded in embedded_strings {
+                        //     let sym2 = regex_rewrite.rewrite_string(
+                        //         &*embedded
+                        //     );
+                        //     // hir.type_map.insert(
+                        //     //     embedded.symbol.node,
+                        //     //     Ty::Auto(AutoTy::Tuple { fields: vec![] })
+                        //     // );
+                        //     unimplemented!()
+                        // }
+                        // let char_ranges = regex_rewrite.class_map().clone().into_iter()
+                        //                                                     .collect::<Vec<_>>();
+                        // for (i, &(_, sym)) in char_ranges.iter().enumerate() {
+                        //     let sym_from_path = Sym::FromPath(Path {
+                        //         position: vec![Position::Idx(i)]
+                        //     });
+                        //     sym_map.insert(sym, sym_from_path);
+                        // }
+                        // let class_ranges =
+                        LexerLayer::CharClassifier(vec![])
                     } else {
                         // We are at level 0 and adding strings to a newly created level 1.
-                        InvocationOfInnerLayer::Invoke {
-                            lexer_invocation: Lexer::new(rs::Term::intern("grammar"), vec![]),
+                        LexerLayer::Invoke {
+                            lexer_id: 0,
                             embedded_strings: embedded_strings,
                         }
                     }
                 }
-                InvocationOfInnerLayer::CharClassifier(_) => unreachable!()
+                LexerLayer::CharClassifier(_) => unreachable!()
             }
         } else {
-            ir.lower_level
+            ir.lexer_layer
         };
-
-        let mut trace_sources = vec![];
-        let mut basic_rules = vec![];
+        let start_sym = Sym::Fragment(ir.start);
+        let start = sym_map.intern(&mut grammar, &start_sym);
+        grammar.set_start(start);
+        // ir.type_collector.add_lhs(&mut grammar, &mut sym_map, &ir.rules);
+        let grammar_rules = ir.rules.lower(&mut grammar, &mut sym_map);
         // Code common to all rules.
-        for rule in &hir.rules {
-            rule.add_to(&mut grammar);
-            basic_rules.extend(rule.basic_rules().into_iter());
-            trace_sources.extend(rule.source_origins().into_iter());
+        for rule in &grammar_rules.rules {
+            IrPrepared::add_rule(&mut grammar, &mut sym_map, rule);
         }
         // Must rewrite sequence rules. They need to be analyzed later.
         grammar.rewrite_sequences();
@@ -372,14 +386,25 @@ impl IrPrepared {
             grammar: grammar,
             // Final
             common: CommonPrepared {
-                basic_rules: basic_rules,
-                attrs: ir.attrs,
+                rules: grammar_rules,
+                attr_arguments: ir.attr_arguments,
                 errors: ir.errors,
-                trace_tokens: ir.trace_tokens,
-                trace_sources: trace_sources,
-                lower_level: lower_level,
-                name_map: ir.name_map,
-                hir: hir,
+                trace: ir.trace,
+                lexer_layer,
+                sym_map,
+                type_map: ir.type_collector.types,
+            }
+        }
+    }
+
+    fn add_rule(grammar: &mut Grammar, sym_map: &mut SymMap, rule: &Rule) {
+        match rule {
+            &Rule { lhs, ref rhs, sequence: Some((min, max)), .. } => {
+                let rhs = rhs.first().cloned().unwrap();
+                grammar.sequence(lhs).inclusive(min, max).rhs(rhs);
+            }
+            &Rule { lhs, ref rhs, sequence: None, .. } => {
+                grammar.rule(lhs).rhs(&rhs[..]);
             }
         }
     }
@@ -387,39 +412,39 @@ impl IrPrepared {
 
 impl IrBinarized {
     fn compute(mut ir: IrPrepared) -> Result<Self, TransformationError> {
-        let mut cycle_matrix = BitMatrix::new(ir.grammar.num_syms(), ir.grammar.num_syms());
-        for (&lhs_sym, ty) in &ir.common.hir.type_map {
-            for ty_sym in ty.symbols() {
-                cycle_matrix.set(lhs_sym.usize(), ty_sym.usize(), true);
-            }
-        }
-        let mut cycles_among_auto_types = vec![];
-        cycle_matrix.transitive_closure();
-        // make sure the actions still correspond to grammar rules.
-        // do not need raw hir rules?
-        for rule in &ir.common.basic_rules {
-            // Declare lambdas
-            let to_rhs_symbol = |pos: usize| rule.rhs[pos];
-            let is_in_cycle = |sym: &rs::Spanned<Symbol>| cycle_matrix[(sym.node.usize(), sym.node.usize())];
-            // 
-            if is_in_cycle(&rule.lhs) {
-                // why does this only run for bound symbols, not all symbols? optimization??
-                // add regression test for recursive type among sequences?
-                let bound_symbols = rule.action.directly_bound_positions().map(to_rhs_symbol);
-                let causes = bound_symbols.filter(is_in_cycle).collect();
-                // can we access the symbolic name through the maps instead?
-                // do we access the symbolic name correctly? equivalently to through hir_map? - No, because we need spans from the hir_map.
-                // rule.history().origin()
-                cycles_among_auto_types.push(CycleWithCauses {
-                    lhs: rule.lhs,
-                    causes: causes,
-                });
-            }
-        }
-        if cycles_among_auto_types.len() > 0 {
-            // We have cycles among types. Report them.
-            ir.common.errors.push(TransformationError::RecursiveType(cycles_among_auto_types));
-        }
+        // let mut cycle_matrix = BitMatrix::new(ir.grammar.num_syms(), ir.grammar.num_syms());
+        // // for (&lhs_sym, ty) in &ir.common.type_map {
+        // //     for ty_sym in ty.symbols() {
+        // //         cycle_matrix.set(lhs_sym.usize(), ty_sym.usize(), true);
+        // //     }
+        // // }
+        // let mut cycles_among_auto_types = vec![];
+        // cycle_matrix.transitive_closure();
+        // // make sure the actions still correspond to grammar rules.
+        // // do not need raw hir rules?
+        // for rule in &ir.common.rules {
+        //     // Declare lambdas
+        //     let to_rhs_symbol = |pos: usize| rule.rhs[pos];
+        //     let is_in_cycle = |sym: &rs::Spanned<Symbol>| cycle_matrix[(sym.node.usize(), sym.node.usize())];
+        //     // 
+        //     if is_in_cycle(&rule.lhs) {
+        //         // why does this only run for bound symbols, not all symbols? optimization??
+        //         // add regression test for recursive type among sequences?
+        //         let bound_symbols = rule.action.directly_bound_positions().map(to_rhs_symbol);
+        //         let causes = bound_symbols.filter(is_in_cycle).collect();
+        //         // can we access the symbolic name through the maps instead?
+        //         // do we access the symbolic name correctly? equivalently to through hir_map? - No, because we need spans from the hir_map.
+        //         // rule.history().origin()
+        //         cycles_among_auto_types.push(CycleWithCauses {
+        //             lhs: rule.lhs,
+        //             causes: causes,
+        //         });
+        //     }
+        // }
+        // if cycles_among_auto_types.len() > 0 {
+        //     // We have cycles among types. Report them.
+        //     ir.common.errors.push(TransformationError::RecursiveType(cycles_among_auto_types));
+        // }
 
         let bin_grammar = ir.grammar.binarize();
 
@@ -434,8 +459,9 @@ impl IrBinarized {
 impl IrNormalized {
     fn compute(ir: IrBinarized) -> Self {
         // eliminate
+        let _start = ir.bin_grammar.start();
         let (bin_grammar, mut nulling_grammar) = ir.bin_grammar.eliminate_nulling();
-        let start = bin_grammar.get_start();
+        let start = bin_grammar.start();
         let trivial_derivation = nulling_grammar.rules().any(|rule| rule.lhs() == start);
         let mut null_cycle_matrix = BitMatrix::new(bin_grammar.num_syms(), bin_grammar.num_syms());
         for rule in nulling_grammar.rules() {
@@ -472,7 +498,7 @@ impl IrProperNormalized {
     fn compute(mut ir: IrNormalized) -> Self {
         // analyze reachability and productiveness
         {
-            let start = ir.bin_grammar.get_start();
+            let start = ir.bin_grammar.start();
             let mut usefulness = Usefulness::new(&mut *ir.bin_grammar).reachable([start]);
             for rule_uselessness in usefulness.useless_rules() {
                 if rule_uselessness.unreachable {
@@ -484,11 +510,11 @@ impl IrProperNormalized {
                     let rule = rule_uselessness.rule;
                     for (pos, &sym) in rule.rhs().iter().enumerate() {
                         if !usefulness.productivity(sym) {
-                            let dots = rule.history().dots();
-                            match (dots[pos].trace(), dots[pos + 1].trace()) {
+                            let (dot_a, dot_b) = (rule.history().dot(pos), rule.history().dot(pos + 1));
+                            match (dot_a.trace(), dot_b.trace()) {
                                 (Some(dot1), Some(dot2)) => {
-                                    if dot1.rule == dot2.rule && dot1.pos + 1 == dot2.pos {
-                                        ir.warnings.unproductive_rules.push((dot1.rule, dot1.pos));
+                                    if dot1.0 == dot2.0 && dot1.1 + 1 == dot2.1 {
+                                        ir.warnings.unproductive_rules.push((dot1.0, dot1.1));
                                     }
                                 }
                                 _ => {}
@@ -559,9 +585,9 @@ impl IrMapped {
             remap.get_mapping()
         };
         // Create a symbol mapping.
-        let maps = InternalExternalNameMap::new(maps, ir.common.name_map.clone());
+        let maps = InternalExternalNameMap::new(maps, ir.common.sym_map.clone());
         // Internalize the start symbol.
-        if let Some(start) = maps.internalize(bin_grammar.get_start()) {
+        if let Some(start) = maps.internalize(bin_grammar.start()) {
             bin_grammar.set_start(start);
         } else {
             // This is the second place where a grammar is checked for being empty.
@@ -578,13 +604,13 @@ impl IrMapped {
             bin.rule(rule.lhs()).rhs_with_history(rule.rhs(), history);
         }
         let mut remapped_nulling_grammar = BinarizedGrammar::new();
-        if let Some(start) = maps.internalize(ir.nulling_grammar.get_start()) {
+        if let Some(start) = maps.internalize(ir.nulling_grammar.start()) {
             remapped_nulling_grammar.set_start(start);
         }
         for _ in 0 .. bin_grammar.num_syms() {
             let _: Symbol = remapped_nulling_grammar.sym();
         }
-        bin.set_start(bin_grammar.get_start());
+        bin.set_start(bin_grammar.start());
         for rule in ir.nulling_grammar.rules() {
             let lhs = maps.internalize(rule.lhs()).unwrap();
             let rhs: Vec<_>;
@@ -605,10 +631,9 @@ impl IrMapped {
     }
 
     pub fn transform_from_stmts(stmts: ast::Stmts) -> Result<Self, TransformationError> {
-        let attrs = Attrs::compute(&stmts.attrs[..])?;
-        let ir = IrStmtsAndAttrs::compute(stmts, attrs)?;
-        let ir = IrInitialHir::compute(ir)?;
-        let ir = IrFinalHir::compute(ir);
+        // let attrs = Attrs::compute(&stmts.attrs[..])?;
+        let ir = IrStmts::compute(stmts)?;
+        let ir = IrWithRules::compute(ir)?;
         let ir = IrPrepared::compute(ir);
         let ir = IrBinarized::compute(ir)?;
         let ir = IrNormalized::compute(ir);
@@ -616,13 +641,14 @@ impl IrMapped {
         IrMapped::compute(ir)
     }
 
-    pub fn report_warnings(&self, cx: &mut rs::ExtCtxt) {
-        let warn = WarningsWithContext {
-            attrs: &self.common.attrs,
-            basic_rules: &self.common.basic_rules[..],
-            causes: &self.warnings,
-        };
-        warn.report_warnings(cx);
+    pub fn report_warnings(&self) {
+        unimplemented!()
+        // let warn = WarningsWithContext {
+        //     attrs: &self.common.attrs,
+        //     basic_rules: &self.common.basic_rules[..],
+        //     causes: &self.warnings,
+        // };
+        // warn.report_warnings(cx);
     }
 
     pub fn get_errors(&self) -> Option<&[TransformationError]> {
@@ -640,14 +666,16 @@ impl From<IrMapped> for Ir {
             grammar: ir.bin_mapped_grammar,
             nulling_grammar: ir.nulling_grammar,
             trivial_derivation: ir.trivial_derivation,
-            basic_rules: ir.common.basic_rules,
-            type_map: ir.common.hir.type_map,
+            rules: ir.common.rules,
+            type_map: ir.common.type_map,
             maps: ir.maps,
-            assert_type_equality: ir.common.hir.assert_type_equality.into_inner(),
-            arguments_from_outer_layer: ir.common.attrs.arguments_from_outer_layer().clone(),
-            invocation_of_inner_layer: ir.common.lower_level,
-            trace_tokens: ir.common.trace_tokens,
-            trace_sources: ir.common.trace_sources,
+            errors: ir.common.errors,
+            // assert_type_equality: ir.common.hir.assert_type_equality.into_inner(),
+            // arguments_from_outer_layer: ir.common.attrs.arguments_from_outer_layer().clone(),
+            // invocation_of_inner_layer: ir.common.lower_level,
+            lexer_layer: ir.common.lexer_layer,
+            attr_arguments: ir.common.attr_arguments,
+            trace: ir.common.trace,
         }
     }
 }
@@ -665,11 +693,11 @@ impl Ir {
         self.maps.externalize(symbol)
     }
 
-    pub fn name_of_external(&self, symbol: Symbol) -> Option<SymbolicName> {
-        self.maps.name_of_external(symbol)
+    pub fn sym_of_external(&self, symbol: Symbol) -> Option<Sym> {
+        self.maps.sym_of_external(symbol)
     }
 
-    pub fn name_map(&self) -> &NameMap {
-        self.maps.name_map()
+    pub fn sym_map(&self) -> &SymMap {
+        self.maps.sym_map()
     }
 }

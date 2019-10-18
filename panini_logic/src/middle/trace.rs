@@ -7,18 +7,27 @@ use middle::flatten_stmts::{Path, Position};
 
 #[derive(Debug)]
 pub struct Trace {
-    tokens: BTreeMap<Path, TraceToken>,
+    pub tokens: BTreeMap<Path, TraceToken>,
+    pub stmt_positions: Vec<StmtTokenPosition>,
+    pub rule_tokens: Vec<BTreeMap<Option<usize>, usize>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourceOrigin {
-    pub rule_id: u32,
-    pub rule_pos: Vec<u32>,
+#[derive(Debug)]
+pub struct StmtTokenPosition {
+    lhs: Option<FragmentId>,
+    position: usize,
 }
+
+// #[derive(Clone, Debug, Eq, PartialEq)]
+// pub struct SourceOrigin {
+//     pub rule_id: u32,
+//     pub rule_pos: Vec<u32>,
+// }
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum TraceToken {
     Fragment(FragmentId),
+    Quote,
     String(String),
     LParen,
     RParen,
@@ -39,6 +48,7 @@ impl TraceToken {
             &TraceToken::EmptyProduct => Cow::Borrowed("()"),
             &TraceToken::Alternative => Cow::Borrowed("|"),
             &TraceToken::PrecedencedAlternative => Cow::Borrowed("|>"),
+            &TraceToken::Quote => Cow::Borrowed("\""),
             &TraceToken::String(ref name) => Cow::Owned(name.as_str().to_string()),
 
             &TraceToken::Fragment(fragment_id) => {
@@ -52,6 +62,8 @@ impl Trace {
     pub fn from_stmts(stmts: &Stmts) -> Self {
         let mut trace = Trace {
             tokens: BTreeMap::new(),
+            stmt_positions: vec![],
+            rule_tokens: vec![],
         };
         trace.flatten_stmts(stmts);
         trace
@@ -60,16 +72,23 @@ impl Trace {
     fn flatten_stmts(&mut self, stmts: &Stmts) {
         for (stmt_idx, stmt) in stmts.stmts.iter().enumerate() {
             let mut last_level = None;
+            let start_path = Path {
+                position: vec![
+                    Position::IdxWithFragment {
+                        idx: stmt_idx,
+                        fragment: stmt.lhs,
+                    },
+                ],
+            };
+            self.stmt_positions.push(StmtTokenPosition {
+                lhs: Some(stmt.lhs),
+                position: self.tokens.len()
+            });
             for (alternative_idx, (level, ref rhs, ref _action)) in stmt.body.iter().enumerate() {
-                let path = Path {
-                    position: vec![
-                        Position::IdxWithFragment {
-                            idx: stmt_idx,
-                            fragment: stmt.lhs,
-                        },
-                        Position::Alternative(alternative_idx),
-                    ],
-                };
+                let mut path = start_path.clone();
+                if stmt.body.len() > 1 {
+                    path.position.push(Position::Alternative(alternative_idx));
+                }
                 if alternative_idx != 0 {
                     let token = if last_level.is_none() || last_level == Some(level) {
                         TraceToken::Alternative
@@ -82,11 +101,26 @@ impl Trace {
                 self.flatten_rhs(path, rhs);
             }
         }
+        self.stmt_positions.push(StmtTokenPosition {
+            lhs: None,
+            position: self.tokens.len(),
+        });
     }
 
     fn flatten_rhs(&mut self, path: Path, rhs: &Rhs) {
         for (rhs_idx, element) in rhs.0.iter().enumerate() {
             let mut path = path.clone();
+            // if let Some(bind_id) = element.bind {
+            //     path.position.push(Position::Bind(bind_id));
+            // }
+            match &element.elem {
+                &RhsAst::Fragment(_) => {}
+                _ => {
+                    if rhs.0.len() > 1 {
+                        path.position.push(Position::Idx(rhs_idx));
+                    }
+                }
+            }
             match &element.elem {
                 &RhsAst::Fragment(fragment_id) => {
                     path.position.push(Position::IdxWithFragment {
@@ -95,12 +129,29 @@ impl Trace {
                     });
                     self.tokens.insert(path, TraceToken::Fragment(fragment_id));
                 }
+                &RhsAst::String(ref _string) => {
+                    // path.position.push(Position::Idx(rhs_idx));
+                    // let mut left_quote_path = path.clone();
+                    // let mut right_quote_path = path.clone();
+                    // left_quote_path.push(Position::LeftQuote);
+                    // right_quote_path.push(Position::RightQuote);
+                    // self.tokens.insert(left_quote_path, TraceToken::Quote);
+                    // self.tokens.insert(right_quote_path, TraceToken::Quote);
+                    // let mut regex_rewrite = RegexTranslation::new();
+                    unimplemented!()
+                }
                 &RhsAst::Sequence(ref sequence) => {
-                    path.position.push(Position::Idx(rhs_idx));
                     path.position.push(Position::Sequence {
                         min: sequence.min,
                         max: sequence.max,
                     });
+                    if sequence.rhs.0.len() > 1 {
+                        let left_paren_path = path.clone();
+                        let mut right_paren_path = path.clone();
+                        right_paren_path.position.push(Position::SequenceEnd);
+                        self.tokens.insert(left_paren_path, TraceToken::LParen);
+                        self.tokens.insert(right_paren_path, TraceToken::RParen);
+                    }
                     let mut star_or_plus_path = path.clone();
                     star_or_plus_path.position.push(Position::SequenceToken);
                     if sequence.min == 0 && sequence.max == None {
@@ -111,13 +162,14 @@ impl Trace {
                     self.flatten_rhs(path, &sequence.rhs);
                 }
                 &RhsAst::Sum(ref summands) => {
-                    path.position.push(Position::Idx(rhs_idx));
                     if summands.is_empty() {
                         self.tokens.insert(path.clone(), TraceToken::EmptyProduct);
                     }
                     for (summand_idx, summand) in summands.iter().enumerate() {
                         let mut path = path.clone();
-                        path.position.push(Position::Alternative(summand_idx));
+                        if summands.len() > 1 {
+                            path.position.push(Position::Alternative(summand_idx));
+                        }
                         if summand_idx != 0 {
                             self.tokens.insert(path.clone(), TraceToken::Alternative);
                         }
@@ -125,7 +177,6 @@ impl Trace {
                     }
                 }
                 &RhsAst::Product(ref rhs) => {
-                    path.position.push(Position::Idx(rhs_idx));
                     let mut left_paren_path = path.clone();
                     let mut right_paren_path = path.clone();
                     left_paren_path.position.push(Position::Idx(0));
@@ -149,5 +200,11 @@ impl Trace {
 
     pub fn tokens(&self) -> &BTreeMap<Path, TraceToken> {
         &self.tokens
+    }
+
+    pub fn stringify_tokens(&self, fragment_names: &BTreeMap<FragmentId, String>) -> Vec<String> {
+        self.tokens.iter().map(|(_, token)| {
+            token.as_str(fragment_names).to_string()
+        }).collect()
     }
 }

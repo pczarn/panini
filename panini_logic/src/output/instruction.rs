@@ -1,13 +1,15 @@
 use cfg::Symbol;
 use enum_coder::enum_coder;
 
-use back::IrTranslator;
+use output::translator::IrTranslator;
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct InstructionList {
-    list: Vec<Instruction>,
+    pub list: Vec<Instruction>,
 }
 
 enum_coder! {
+    #[derive(Debug, Eq, PartialEq)]
     pub enum Instruction {
         // Concat(usize),
         // ConcatSeparated(usize, rs::TokenStream),
