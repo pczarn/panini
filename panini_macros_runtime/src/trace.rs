@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use gearley::grammar::ExternalDot;
 use gearley::forest::Forest;
-use gearley::recognizer::Recognizer;
+use gearley::grammar::ExternalDot;
 use gearley::recognizer::item::{CompletedItem, Origin};
+use gearley::recognizer::Recognizer;
 
 /// Trace can be printed at every step of the parse. It shows the set of
 /// items, which are grouped by grammar location.
@@ -11,15 +11,16 @@ use gearley::recognizer::item::{CompletedItem, Origin};
 pub fn print_trace<'f, F>(
     recognizer: &Recognizer<'f, 'f, F>,
     completed_item_set: &[CompletedItem<F::NodeRef>],
-    trace_info: TraceInfo)
-    where F: Forest<'f>
+    trace_info: TraceInfo,
+) where
+    F: Forest<'f>,
 {
     // The externalized table is keyed by rule index. It contains points for
     // the rule's rhs in the external grammar space.
     let external_set = externalize_set(recognizer, completed_item_set, trace_info);
     // Rearrange the table into trace items.
     let items = items_from_set(&external_set, trace_info);
-    // 
+    //
     print_header(recognizer);
     // Print trace items.
     print_items(&items[..]);
@@ -32,9 +33,10 @@ pub fn print_trace<'f, F>(
 fn externalize_set<'f, F>(
     recognizer: &Recognizer<'f, 'f, F>,
     completed_item_set: &[CompletedItem<F::NodeRef>],
-    trace_info: TraceInfo)
-    -> EarleySetExternal
-    where F: Forest<'f>
+    trace_info: TraceInfo,
+) -> EarleySetExternal
+where
+    F: Forest<'f>,
 {
     // Collect points to external_set.
     let mut externalized_set = BTreeMap::new();
@@ -42,26 +44,22 @@ fn externalize_set<'f, F>(
     let rightmost_edge_trace = recognizer.grammar().trace()[2];
     // Include completed items in the trace.
     let trace_of_completed = completed_item_set.iter().filter_map(|completed_item| {
-        rightmost_edge_trace[completed_item.dot as usize].map(|dot| {
-            (dot, completed_item.origin)
-        })
+        rightmost_edge_trace[completed_item.dot as usize].map(|dot| (dot, completed_item.origin))
     });
     // Include all non-completed items in the trace.
     let trace_of_other_items = recognizer.trace();
     for (dot, origin) in trace_of_completed.chain(trace_of_other_items) {
         let original = trace_info.source_dot_from_external_dot(dot);
-        externalized_set.entry(original.rule).or_insert(vec![])
+        externalized_set
+            .entry(original.rule)
+            .or_insert(vec![])
             .push((original.pos, origin));
     }
     externalized_set
 }
 
 // Take an externalized set, and return a list of items ready for display.
-fn items_from_set(
-    externalized_set: &EarleySetExternal,
-    trace_info: TraceInfo)
-    -> Vec<TraceItem>
-{
+fn items_from_set(externalized_set: &EarleySetExternal, trace_info: TraceInfo) -> Vec<TraceItem> {
     let mut items = vec![];
     // A tool for rearranging the points for each rule.
     let mut transform = TransformRhsPoints::new();
@@ -90,7 +88,8 @@ fn items_from_set(
 
 // Display a header for the current location. Write to STDOUT.
 fn print_header<'f, F>(recognizer: &Recognizer<'f, 'f, F>)
-    where F: Forest<'f>
+where
+    F: Forest<'f>,
 {
     println!("recognizer.earleme == {}", recognizer.earleme());
     println!("====================================");
@@ -98,17 +97,29 @@ fn print_header<'f, F>(recognizer: &Recognizer<'f, 'f, F>)
 
 // Display a list of items. Write to STDOUT.
 fn print_items(items: &[TraceItem]) {
-    let lhs_width = items.iter().map(|trace_item| trace_item.lhs.len()).max().unwrap_or(0);
-    let rhs_width = items.iter().map(|trace_item| trace_item.print.len()).max().unwrap_or(0);
+    let lhs_width = items
+        .iter()
+        .map(|trace_item| trace_item.lhs.len())
+        .max()
+        .unwrap_or(0);
+    let rhs_width = items
+        .iter()
+        .map(|trace_item| trace_item.print.len())
+        .max()
+        .unwrap_or(0);
     for item in items {
-        println!("{:lhs_width$}: {:rhs_width$} ({})",
-                            item.lhs,
-                            &item.print,
-                            item.origins.iter().map(|o| o.to_string())
-                                               .collect::<Vec<_>>()
-                                               .join(", "),
-                            lhs_width = lhs_width,
-                            rhs_width = rhs_width)
+        println!(
+            "{:lhs_width$}: {:rhs_width$} ({})",
+            item.lhs,
+            &item.print,
+            item.origins
+                .iter()
+                .map(|o| o.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            lhs_width = lhs_width,
+            rhs_width = rhs_width
+        )
     }
 }
 
@@ -170,7 +181,7 @@ impl TraceInfo {
     /// Gets the textual representation of a rule.
     fn rule_source(&self, rule_idx: Rule) -> RuleSource {
         RuleSource {
-            source: self.tokens[rule_idx as usize]
+            source: self.tokens[rule_idx as usize],
         }
     }
 }
@@ -185,13 +196,19 @@ impl TransformRhsPoints {
         self.point_sets_by_positions.clear();
         // First step.
         for &(pos, origin) in &points[..] {
-            self.points_by_origin.entry(origin).or_insert(vec![]).push(pos);
+            self.points_by_origin
+                .entry(origin)
+                .or_insert(vec![])
+                .push(pos);
         }
         // Second step.
         for (&origin, ref mut rhs_indices) in &mut self.points_by_origin {
             rhs_indices.sort();
             rhs_indices.dedup();
-            self.point_sets_by_positions.entry(rhs_indices.clone()).or_insert(vec![]).push(origin);
+            self.point_sets_by_positions
+                .entry(rhs_indices.clone())
+                .or_insert(vec![])
+                .push(origin);
         }
     }
 

@@ -1,17 +1,9 @@
 #![recursion_limit = "256"]
-#![feature(plugin_registrar, rustc_private)]
+#![feature(rustc_private)]
+// plugin_registrar, 
 
 extern crate log;
 extern crate env_logger;
-
-extern crate rustc;
-extern crate syntax;
-extern crate syntax_pos;
-
-extern crate serde_cbor;
-
-extern crate quote;
-extern crate proc_macro2;
 
 extern crate bit_matrix;
 extern crate cfg;
@@ -23,48 +15,28 @@ extern crate enum_coder;
 #[macro_use]
 extern crate maplit;
 
-// #[path = "middle/ecs.rs"]
-// mod ecs;
-
-// pub mod front;
+#[macro_use]
 pub mod middle;
-// pub mod back;
 pub mod input;
 pub mod output;
 
-// pub use front::lexer;
+use middle::ir::Ir;
+use middle::error::TransformationError;
+use input::PathwayGraph;
+use output::instruction::InstructionList;
+use output::translator::IrTranslator;
 
-// use std::error::Error;
-
-use input::ast::Stmts;
-// use output::Instruction;
-
-pub fn lower(_stmts: Stmts) {
-    unimplemented!()
+pub fn process(input: PathwayGraph) -> Result<InstructionList, TransformationError> {
+    phase_1_lower_to_ir(input).map(phase_2_translate)
 }
 
-// pub fn lower(stmts: Stmts) -> Result<Vec<Instruction>, TransformationError> {
-//     match phase_1_lower_to_ir(stmts) {
-//         Ok(ir) => {
-//             phase_2_translate(ir.into())
-//         }
-//         Err(error) => {
-//             Err(error)
-//         }
-//     }
-// }
+pub fn phase_1_lower_to_ir(input: PathwayGraph) -> Result<Ir, TransformationError> {
+    Ir::transform(input)
+}    
 
-// fn phase_1_lower_to_ir(stmts: Stmts) -> Result<IrMapped, TransformationError> {
-//     middle::ir::IrMapped::transform_from_stmts(stmts)
-// }    
-
-// fn phase_2_translate(ir: Ir) -> Vec<Instruction> {
-//     // ir.report_warnings(ecx);
-//     // if let Some(errors) = ir.get_errors() {
-//     //     Err(errors)
-//     // }
-//     back::IrTranslator::new(ir).generate()
-// }
+pub fn phase_2_translate(ir: Ir) -> InstructionList {
+    IrTranslator::new(ir).generate()
+}
 
 // fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError) {
 //     match error {

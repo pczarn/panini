@@ -1,5 +1,7 @@
 ## Panini • [![Latest version](https://img.shields.io/crates/v/panini.png)](https://crates.io/crates/panini)
 
+A blazing fast, modern, extensible parser generator.
+
 Work in progress.
 A general-purpose parser generator as a Rust syntax extension.
 

@@ -6,8 +6,8 @@ use std::cell::RefCell;
 
 pub use quote::ToTokens;
 // pub use proc_macro2::Term;
-pub use proc_macro2::{Ident as Term};
-pub use proc_macro2::{Span, Ident, TokenStream, Literal, Punct, Spacing, TokenTree};
+pub use proc_macro2::Ident as Term;
+pub use proc_macro2::{Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
 
 // pub use syntax::ast;
 // pub use syntax::tokenstream::{Delimited};
@@ -70,8 +70,8 @@ pub use proc_macro2::{Span, Ident, TokenStream, Literal, Punct, Spacing, TokenTr
 
 #[derive(Clone)]
 pub struct Spanned<T> {
-    pub(in super) span: Span,
-    pub(in super) elem: T,
+    pub(super) span: Span,
+    pub(super) elem: T,
 }
 
 pub fn respan<T>(span: Span, elem: T) -> Spanned<T> {
@@ -83,7 +83,7 @@ thread_local!(static COUNTER: RefCell<usize> = RefCell::new(0));
 pub fn gensym(name: &str) -> Ident {
     let counter = COUNTER.with(|c| {
         *c.borrow_mut() += 1;
-        *c.borrow() -1
+        *c.borrow() - 1
     });
     let gen_name = format!("{}__{}", name, counter);
     Ident::new(name, Span::call_site())
@@ -93,8 +93,8 @@ pub fn dummy_spanned<T>(elem: T) -> Spanned<T> {
     respan(Span::call_site(), elem)
 }
 
-pub struct Attribute;
-pub struct ExtCtxt;
+// pub struct Attribute;
+// pub struct ExtCtxt;
 
-#[derive(Hash, Eq, PartialEq)]
-pub struct Name(u32);
+// #[derive(Hash, Eq, PartialEq)]
+// pub struct Name(u32);

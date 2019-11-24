@@ -5,7 +5,7 @@ macro_rules! grammar {
             $lhs:ident
             ->
             ($rule_ty:ty)
-            ::= 
+            ::=
             $(
                 $rule:tt
                 =>
@@ -50,7 +50,42 @@ macro_rules! grammar {
             // $(
             //     $sub_name!(grammar, $sub_content);
             // )*
-            grammar
+            grammar.lower()
+        }
+    )
+}
+
+macro_rules! grammar_make_lower {
+    (
+        $(
+            $lhs:ident
+            ->
+            ($rule_ty:ty)
+            ::=
+            $(
+                $rule:tt
+                =>
+                {$($action_tts:tt)*}
+            )|+
+            ;
+        )*
+    ) => (
+        {
+            fn new_grammar() -> crate::Grammar<(), ()> {
+                use ::std::collections::BTreeMap;
+                crate::Grammar {
+                    rules: BTreeMap::new(),
+                    sub: crate::EnumStreamGrammar::new(),
+                }
+            }
+            let mut grammar =  new_grammar();
+            $(
+                grammar.rule(
+                    stringify!($lhs),
+                    rule!($($rule [__RetTy::$lhs]=> {{$($action_tts)*}})|+),
+                );
+            )*
+            crate::Grammar::make_lower(grammar.rules)
         }
     )
 }
@@ -64,6 +99,9 @@ macro_rules! rule {
     };
     (( $rhs:tt * )) => {
         rule!($rhs).repeat()
+    };
+    (( $rhs0:tt $($rhsN:tt)* )) => {
+        rule!($rhs0) $(.then(rule!($rhsN)))*
     };
     ($rhs:tt [$ret:ident :: $variant:ident]=> $action:expr) => {
         rule!($rhs).action(|mut _input: Vec<$ret>| {
@@ -83,11 +121,12 @@ macro_rules! rule {
 
 macro_rules! declare_binds {
     ([$input:ident] $rhs:ident) => ();
+
     ([$input:ident] ($name:ident : $rhs:ident)) => (
         let $name = $input.pop().unwrap().$rhs();
     );
 
     ([$input:ident] ($($rhs:tt)*)) => {
-        $(declare_binds!([$input] $rhs))*
+        $(declare_binds!([$input] $rhs);)*
     };
 }

@@ -51,9 +51,22 @@ impl<T> EnumStreamGrammar<T> {
             patterns: BTreeMap::new(),
         }
     }
-    
+
     pub fn pattern(&mut self, lhs: &str, pat: Pattern<T>) {
         self.patterns.insert(lhs.to_string(), pat);
+    }
+
+    pub fn eval<'a>(&'a self, elem: T) -> impl Iterator<Item = String> + 'a
+    where
+        T: Copy,
+    {
+        self.patterns.iter().filter_map(move |(s, pat)| {
+            if pat.eval(elem) {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -62,11 +75,11 @@ impl<T> Pattern<T> {
         Pattern::Pat(Box::new(func))
     }
 
-    fn negate(self) -> Pattern<T> {
+    pub fn negate(self) -> Pattern<T> {
         Pattern::Negate(Box::new(self))
     }
 
-    fn and(self, last: Pattern<T>) -> Pattern<T> {
+    pub fn and(self, last: Pattern<T>) -> Pattern<T> {
         let (mut summands, summands_b) = (self.summands(), last.summands());
         summands.extend(summands_b.into_iter());
         Pattern::Conjunction(summands)
@@ -77,6 +90,17 @@ impl<T> Pattern<T> {
             summands
         } else {
             vec![self]
+        }
+    }
+
+    pub fn eval(&self, elem: T) -> bool
+    where
+        T: Copy,
+    {
+        match self {
+            &Pattern::Pat(ref func) => (func)(elem),
+            &Pattern::Negate(ref pat) => !pat.eval(elem),
+            &Pattern::Conjunction(ref summands) => summands.iter().all(|pat| pat.eval(elem)),
         }
     }
 }

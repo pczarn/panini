@@ -28,20 +28,15 @@ pub use std::fmt;
 
 // Grammar and recognizer.
 pub use gearley::grammar;
-pub use gearley::recognizer::Recognizer;
 pub use gearley::recognizer::item::CompletedItem;
+pub use gearley::recognizer::Recognizer;
 // Forest.
-pub use gearley::forest::{Forest, Bocage, Traversal, NullForest};
 pub use gearley::forest::depth_first::cartesian_product::CartesianProduct;
 pub use gearley::forest::depth_first::{
-    NullOrder,
-    ArrayEvaluator,
+    ActionClosureEvaluator, ArrayEvaluator, Evaluated, NodeRef, NullOrder, TraversalBottom,
     ValueArray,
-    ActionClosureEvaluator,
-    NodeRef,
-    TraversalBottom,
-    Evaluated
 };
+pub use gearley::forest::{Bocage, Forest, NullForest, Traversal};
 // Engine's utilities.
 pub use gearley::util::slice_builder::SliceBuilder;
 // Grammar symbol type.
@@ -53,6 +48,12 @@ pub use ref_slice::ref_slice;
 // Shorthand for traversal with default order.
 pub type TraversalUnordered<'g, T, V> = Traversal<'g, 'g, 'g, T, V, NullOrder<'g, 'g, T, V>>;
 // Run-time tracing in this crate.
-pub use self::trace::{TraceInfo, RuleSource, print_trace};
+pub use self::trace::{print_trace, RuleSource, TraceInfo};
 
 pub use serde_cbor::from_slice as serde_cbor_from_slice;
+
+pub struct StaticInfo {
+    serialized_grammar: &'static [u8],
+    sym_names: &'static [&'static str],
+    trace_info: TraceInfo,
+}

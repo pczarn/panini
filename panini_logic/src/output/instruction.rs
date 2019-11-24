@@ -1,11 +1,21 @@
+use std::collections::HashMap;
+
 use cfg::Symbol;
 use enum_coder::enum_coder;
 
+use input::FragmentId;
+use middle::symbol_maps::InputSymbol;
 use output::translator::IrTranslator;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct InstructionList {
     pub list: Vec<Instruction>,
+}
+
+impl InstructionList {
+    pub fn new() -> Self {
+        InstructionList { list: vec![] }
+    }
 }
 
 enum_coder! {
@@ -20,13 +30,14 @@ enum_coder! {
         },
 
         MakeTerminalAccessorStruct {
-            number: usize,
+            fn_count: usize,
+            map: HashMap<FragmentId, Symbol>,
         },
 
         // // defines:
         // //
         // // impl EnumStreamParser<C, D> {
-        // //     fn common_parse<Iter>(&'g mut self, into_iter: Iter, traced: bool) 
+        // //     fn common_parse<Iter>(&'g mut self, into_iter: Iter, traced: bool)
         // // }
         // MakeEnumStreamParserCommonParseImpl {
         //     UpperParse: rs::Ident,
@@ -83,8 +94,17 @@ enum_coder! {
                 terminal,
             }
         }
+        let map = translator.ir.maps.sym_map.iter().filter_map(|(key, &value)| {
+            match key {
+                &InputSymbol::Fragment(fragment_id) => {
+                    Some((fragment_id, value))
+                }
+                &InputSymbol::FromPath(..) => None
+            }
+        }).collect();
         MakeTerminalAccessorStruct {
-            number: translator.terminals.len(),
+            fn_count: translator.terminals.len(),
+            map,
         }
 
         // ConcatSeparated(ir.rules.len(), quote! { , });

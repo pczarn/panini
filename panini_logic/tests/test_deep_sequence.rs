@@ -13,7 +13,7 @@ use panini_logic::input::attr_arguments::AttrArguments;
 use panini_logic::middle::ir::Ir;
 use panini_logic::middle::flatten_stmts::{FlattenStmts, Path, Position};
 use panini_logic::middle::trace::{Trace, TraceToken};
-use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleValue};
+use panini_logic::middle::rule_rewrite::{RuleRewrite, InputSymbol, InputRule};
 use panini_logic::middle::type_collector::{TypeCollector, Type};
 use panini_logic::output::translator::IrTranslator;
 use panini_logic::output::instruction::{Instruction, InstructionList};
@@ -157,9 +157,9 @@ fn test_deep_sequence() {
                 Position::IdxWithFragment { idx: 0, fragment: start },
                 Position::Sequence { min: 0, max: None }
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a), 1 => InputSymbol::Fragment(b) },
             sequence: Some((0, None)),
             traces: btreemap! {
                 Some(0) => 1, Some(1) => 2, Some(2) => 3, None => 5,
@@ -234,7 +234,6 @@ fn test_deep_sequence() {
     };
     let mut collector = TypeCollector::new();
     collector.collect(flatten.paths);
-    collector.simplify_tuples();
     assert_eq!(collector.types, expected_types);
 
     let ir = Ir::transform(stmts).expect("err");
@@ -270,7 +269,10 @@ fn test_deep_sequence() {
         list: vec![
             Instruction::MakeTerminalAccessorFn { terminal: external_a_sym },
             Instruction::MakeTerminalAccessorFn { terminal: external_b_sym },
-            Instruction::MakeTerminalAccessorStruct { number: 2 },
+            Instruction::MakeTerminalAccessorStruct {
+                number: 2,
+                map: hashmap! {}
+            },
         ]
     };
     assert_eq!(instruction_list, expected_instruction_list);

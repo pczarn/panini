@@ -1,117 +1,42 @@
-use std::collections::{HashMap, BTreeMap, BTreeSet};
 use std::cmp::Ordering;
-use std::mem;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::iter;
+use std::mem;
 
 use bit_matrix::BitMatrix;
-use gearley::grammar::{Grammar, BinarizedGrammar, History};
 use cfg::classification::cyclical::Cycles;
-use cfg::remap::{Remap, Mapping};
-use cfg::rule::RuleRef;
-use cfg::rule::container::RuleContainer;
 use cfg::classification::useful::Usefulness;
+use cfg::remap::{Mapping, Remap};
+use cfg::rule::container::RuleContainer;
+use cfg::rule::RuleRef;
 use cfg::*;
-use cfg_regex::{RegexTranslation, Class};
+use cfg_regex::{Class, RegexTranslation};
+use gearley::grammar::{BinarizedGrammar, Grammar, History};
 
-use input::{ast, LEXER_START_FRAGMENT, LexerId, FragmentId};
-use input::attr_arguments::AttrArguments;
-use middle::error::{TransformationError, CycleWithCauses};
+use input::{self, FragmentId, LexerId, LEXER_START_FRAGMENT};
+use input::ast::{PathwayGraph, Step, IdxKind, NULL_NODE};
+use middle::embedded_string::EmbeddedString;
+use middle::error::{CycleWithCauses, TransformationError};
+use middle::simplify_pathways::SimplifyPathways;
+use middle::rule_rewrite::{InputRuleRewriteResult, Rule, RuleRewrite, RuleRewriteResult};
+use middle::symbol_maps::{InputSymbol, SymbolMaps};
 use middle::trace::Trace;
-use middle::rule_rewrite::{RuleValue, Rule, Sym, RuleRewrite, LowerRuleRewriteResult, RuleRewriteResult};
-use middle::flatten_stmts::{FlattenStmts, Path, Position};
 use middle::type_collector::{Type, TypeCollector};
 use middle::warn::{WarningCauses, WarningsWithContext};
-use middle::embedded_string::EmbeddedString;
 
 pub struct Ir {
     pub grammar: BinarizedGrammar,
     pub nulling_grammar: BinarizedGrammar,
     pub trivial_derivation: bool,
     // for actions, accessed by action ID.
-    pub rules: LowerRuleRewriteResult,
-    pub type_map: BTreeMap<Path, BTreeSet<Type>>,
-    pub maps: InternalExternalNameMap,
+    pub rules: RuleRewriteResult,
+    pub type_map: Vec<BTreeSet<Type>>,
+    pub maps: SymbolMaps,
     // pub assert_type_equality: Vec<(Symbol, Type)>,
     pub attr_arguments: AttrArguments,
     pub lexer_layer: LexerLayer,
     pub trace: Trace,
     pub errors: Vec<TransformationError>,
-}
-
-#[derive(Clone)]
-pub struct SymMap {
-    pub sym_map: HashMap<Sym, Symbol>,
-    pub sym_vec: Vec<Option<Sym>>,
-}
-
-pub struct InternalExternalNameMap {
-    internal_external: Mapping,
-    sym_map: SymMap,
-}
-
-impl SymMap {
-    fn new() -> Self {
-        SymMap {
-            sym_map: HashMap::new(),
-            sym_vec: vec![],
-        }
-    }
-
-    pub fn intern(&mut self, grammar: &mut Grammar, internal_sym: &Sym) -> Symbol {
-        if let Some(&symbol) = self.sym_map.get(internal_sym) {
-            symbol
-        } else {
-            let new_sym: Symbol = grammar.sym();
-            self.insert(new_sym, internal_sym.clone());
-            new_sym
-        }
-    }
-
-    fn insert(&mut self, sym: Symbol, internal_sym: Sym) {
-        self.insert_padding(sym);
-        self.sym_vec[sym.usize()] = Some(internal_sym.clone());
-        self.sym_map.insert(internal_sym, sym);
-    }
-
-    fn insert_padding(&mut self, symbol: Symbol) {
-        if self.sym_vec.len() <= symbol.usize() {
-            let pad_len = symbol.usize() - self.sym_vec.len() + 1;
-            self.sym_vec.extend(iter::repeat(None).take(pad_len));
-        }
-    }
-
-    fn get(&self, sym: Symbol) -> Option<Sym> {
-        self.sym_vec.get(sym.usize()).and_then(|s| s.clone())
-    }
-
-    pub fn syms(&self) -> &[Option<Sym>] {
-        &self.sym_vec[..]
-    }
-}
-
-impl InternalExternalNameMap {
-    fn new(internal_external: Mapping, sym_map: SymMap) -> Self {
-        InternalExternalNameMap {
-            internal_external: internal_external,
-            sym_map,
-        }
-    }
-
-    pub fn internalize(&self, sym: Symbol) -> Option<Symbol> {
-        self.internal_external.to_internal[sym.usize()]
-    }
-
-    pub fn externalize(&self, sym: Symbol) -> Symbol {
-        self.internal_external.to_external[sym.usize()]
-    }
-
-    pub fn sym_of_external(&self, sym: Symbol) -> Option<Sym> {
-        self.sym_map.get(sym)
-    }
-
-    fn sym_map(&self) -> &SymMap {
-        &self.sym_map
-    }
 }
 
 /// Describes how the inner layer will be invoked. Most of the time, the inner layer
@@ -124,18 +49,18 @@ pub enum LexerLayer {
         embedded_strings: Vec<String>,
     },
     CharClassifier(Vec<(Class, Symbol)>),
-    None
+    None,
 }
 
-struct IrStmts {
-    stmts: ast::Stmts,
+struct IrInput {
+    input: input::Input,
     start: FragmentId,
 }
 
 struct IrWithRules {
-    rules: RuleRewriteResult,
+    rules: InputRuleRewriteResult,
     start: FragmentId,
-    attr_arguments: AttrArguments,
+    parameters: input::Parameters,
     errors: Vec<TransformationError>,
     embedded_strings: Vec<String>, // TODO
     // Final
@@ -190,7 +115,6 @@ struct IrProperNormalized {
 pub struct IrMapped {
     bin_mapped_grammar: BinarizedGrammar,
     nulling_grammar: BinarizedGrammar,
-    maps: InternalExternalNameMap,
     // Warning causes
     warnings: WarningCauses,
     // Final
@@ -201,79 +125,81 @@ pub struct IrMapped {
 // Common
 
 struct CommonPrepared {
-    rules: LowerRuleRewriteResult,
-    attr_arguments: AttrArguments,
+    rules: RuleRewriteResult,
+    parameters: input::Parameters,
     errors: Vec<TransformationError>,
     trace: Trace,
     lexer_layer: LexerLayer,
-    sym_map: SymMap,
-    type_map: BTreeMap<Path, BTreeSet<Type>>,
+    sym_map: SymbolMaps,
+    type_map: Vec<BTreeSet<Type>>,
 }
 
-impl IrStmts {
-    fn compute(mut stmts: ast::Stmts) -> Result<Self, TransformationError> {
+impl IrInput {
+    fn compute(mut input: input::Input) -> Result<Self, TransformationError> {
         // Obtain the explicit start.
-        let start = if let Some(first_stmt) = stmts.stmts.get(0) {
-            first_stmt.lhs
-        } else {
-            return Err(TransformationError::GrammarIsEmpty);
-        };
+        let start = IrInput::first_stmt_fragment(&input.pathway_graph)?;
 
-        if let Some(ref lexer_arguments) = stmts.attr_arguments.lexer_arguments {
+        if let &Some(input::LexerParameters { ref terminals, .. }) = &input.parameters.lexer_parameters {
             // Set the implicit start.
-            for &terminal in &lexer_arguments.terminals {
-                let lower_start_stmt = ast::Stmt {
-                    lhs: LEXER_START_FRAGMENT,
-                    body: vec![
-                        (
-                            0,
-                            ast::Rhs(vec![
-                                ast::RhsElement {
-                                    bind: None,
-                                    elem: ast::RhsAst::Fragment(terminal)
-                                }
-                            ]),
-                            ast::Action { expr: None }
-                        )
-                    ],
-                    ty: None,
-                };
-                stmts.stmts.push(lower_start_stmt);
+            for &terminal_id in terminals {
+                IrInput::implicit_start(&mut input.pathway_graph, terminal_id);
             }
         }
 
-        Ok(IrStmts {
-            stmts,
-            start,
-        })
+        Ok(IrInput { input, start })
+    }
+
+    fn first_stmt_fragment(pathway_graph: &PathwayGraph) -> Result<FragmentId, TransformationError> {
+        pathway_graph
+            .iter()
+            .filter_map(|&step| match step {
+                Step::StmtFragment(fragment_id) => Some(fragment_id),
+                _ => None,
+            })
+            .next()
+            .ok_or(TransformationError::GrammarIsEmpty)
+    }
+
+    fn implicit_start(pathway_graph: &mut PathwayGraph, terminal_id: FragmentId) {
+        pathway_graph.node(
+            Step::Idx(IdxKind::Stmt, 0),
+            vec![pathway_graph.node(
+                Step::StmtFragment(LEXER_START_FRAGMENT),
+                vec![pathway_graph.node(
+                    Step::Fragment(terminal_id),
+                    vec![],
+                )]
+            )]
+        );
     }
 }
 
 impl IrWithRules {
-    fn compute(ir: IrStmts) -> Result<Self, TransformationError> {
-        let mut trace = Trace::from_stmts(&ir.stmts);
+    fn compute(ir: IrInput) -> Result<Self, TransformationError> {
+        let mut trace = Trace::from_input(&ir.input);
         let (rules, type_collector) = {
             let mut rule_rewrite = RuleRewrite::new(&mut trace);
-            let mut flatten = FlattenStmts::new();
-            flatten.flatten_stmts(&ir.stmts);
-            rule_rewrite.rewrite(flatten.paths.clone());
+            let mut simplify = SimplifyPathways::new();
+            simplify.simplify_pathways(&ir.input);
+            rule_rewrite.rewrite(simplify.pathway_graph.clone());
             let mut type_collector = TypeCollector::new();
-            type_collector.collect(flatten.join_stmts());
-            type_collector.simplify_tuples();
+            type_collector.collect(simplify.pathway_graph);
             (rule_rewrite.result(), type_collector)
         };
 
         let mut errors = vec![];
         if let Some(inequalities) = type_collector.check_type_equality(&trace) {
-            errors.extend(inequalities.into_iter().map(|spans|
-                TransformationError::TypeMismatch(spans)
-            ));
+            errors.extend(
+                inequalities
+                    .into_iter()
+                    .map(|spans| TransformationError::TypeMismatch(spans)),
+            );
         }
 
-        let lexer_layer = if let Some(lexer_id) = ir.stmts.lexer {
+        let lexer_layer = if let Some(lexer_id) = ir.input.lexer {
             LexerLayer::Invoke {
                 lexer_id,
-                embedded_strings: vec![]
+                embedded_strings: vec![],
             }
         } else {
             LexerLayer::None
@@ -284,7 +210,7 @@ impl IrWithRules {
             start: ir.start,
             trace,
             lexer_layer,
-            attr_arguments: ir.stmts.attr_arguments,
+            parameters: ir.input.parameters,
             embedded_strings: vec![],
             errors,
             type_collector,
@@ -320,7 +246,7 @@ impl IrWithRules {
 impl IrPrepared {
     fn compute(mut ir: IrWithRules) -> Self {
         let mut grammar = Grammar::new();
-        let mut sym_map = SymMap::new();
+        let mut sym_map = SymbolMaps::new();
         let embedded_strings = ir.embedded_strings.clone();
         let lexer_layer = if !ir.embedded_strings.is_empty() {
             match ir.lexer_layer {
@@ -332,7 +258,7 @@ impl IrPrepared {
                     }
                 }
                 LexerLayer::None => {
-                    if ir.attr_arguments.lexer_arguments.is_some() {
+                    if ir.parameters.lexer_parameters.is_some() {
                         // // We are at level 1 .. N and adding strings to the current level.
                         // // Embedded strings are rewritten into rules. Character ranges are
                         // // collected.
@@ -350,7 +276,7 @@ impl IrPrepared {
                         // let char_ranges = regex_rewrite.class_map().clone().into_iter()
                         //                                                     .collect::<Vec<_>>();
                         // for (i, &(_, sym)) in char_ranges.iter().enumerate() {
-                        //     let sym_from_path = Sym::FromPath(Path {
+                        //     let sym_from_path = InputSymbol::FromPath(Path {
                         //         position: vec![Position::Idx(i)]
                         //     });
                         //     sym_map.insert(sym, sym_from_path);
@@ -365,12 +291,12 @@ impl IrPrepared {
                         }
                     }
                 }
-                LexerLayer::CharClassifier(_) => unreachable!()
+                LexerLayer::CharClassifier(_) => unreachable!(),
             }
         } else {
             ir.lexer_layer
         };
-        let start_sym = Sym::Fragment(ir.start);
+        let start_sym = InputSymbol::Fragment(ir.start);
         let start = sym_map.intern(&mut grammar, &start_sym);
         grammar.set_start(start);
         // ir.type_collector.add_lhs(&mut grammar, &mut sym_map, &ir.rules);
@@ -387,23 +313,33 @@ impl IrPrepared {
             // Final
             common: CommonPrepared {
                 rules: grammar_rules,
-                attr_arguments: ir.attr_arguments,
+                parameters: ir.parameters,
                 errors: ir.errors,
                 trace: ir.trace,
                 lexer_layer,
                 sym_map,
                 type_map: ir.type_collector.types,
-            }
+            },
         }
     }
 
-    fn add_rule(grammar: &mut Grammar, sym_map: &mut SymMap, rule: &Rule) {
+    fn add_rule(grammar: &mut Grammar, sym_map: &mut SymbolMaps, rule: &Rule) {
         match rule {
-            &Rule { lhs, ref rhs, sequence: Some((min, max)), .. } => {
+            &Rule {
+                lhs,
+                ref rhs,
+                sequence: Some((min, max)),
+                ..
+            } => {
                 let rhs = rhs.first().cloned().unwrap();
                 grammar.sequence(lhs).inclusive(min, max).rhs(rhs);
             }
-            &Rule { lhs, ref rhs, sequence: None, .. } => {
+            &Rule {
+                lhs,
+                ref rhs,
+                sequence: None,
+                ..
+            } => {
                 grammar.rule(lhs).rhs(&rhs[..]);
             }
         }
@@ -426,7 +362,7 @@ impl IrBinarized {
         //     // Declare lambdas
         //     let to_rhs_symbol = |pos: usize| rule.rhs[pos];
         //     let is_in_cycle = |sym: &rs::Spanned<Symbol>| cycle_matrix[(sym.node.usize(), sym.node.usize())];
-        //     // 
+        //     //
         //     if is_in_cycle(&rule.lhs) {
         //         // why does this only run for bound symbols, not all symbols? optimization??
         //         // add regression test for recursive type among sequences?
@@ -476,7 +412,9 @@ impl IrNormalized {
             let lhs_once = [lhs];
             let mut syms = lhs_once.iter().chain(rhs.iter());
             if syms.any(is_in_cycle) {
-                warnings.cycles_among_nullable.push(history.origin().expect("internal rule with a cycle"));
+                warnings
+                    .cycles_among_nullable
+                    .push(history.origin().expect("internal rule with a cycle"));
                 false
             } else {
                 true
@@ -510,7 +448,8 @@ impl IrProperNormalized {
                     let rule = rule_uselessness.rule;
                     for (pos, &sym) in rule.rhs().iter().enumerate() {
                         if !usefulness.productivity(sym) {
-                            let (dot_a, dot_b) = (rule.history().dot(pos), rule.history().dot(pos + 1));
+                            let (dot_a, dot_b) =
+                                (rule.history().dot(pos), rule.history().dot(pos + 1));
                             match (dot_a.trace(), dot_b.trace()) {
                                 (Some(dot1), Some(dot2)) => {
                                     if dot1.0 == dot2.0 && dot1.1 + 1 == dot2.1 {
@@ -526,12 +465,14 @@ impl IrProperNormalized {
             // does it do anything when all rules are useful?
             usefulness.remove_useless_rules();
         };
-        let to_rule_origin = |rule: RuleRef<History>| {
-            rule.history().origin().expect("internal rule in a cycle")
-        };
+        let to_rule_origin =
+            |rule: RuleRef<History>| rule.history().origin().expect("internal rule in a cycle");
         {
             let mut cycle_analysis = Cycles::new(&mut *ir.bin_grammar);
-            ir.warnings.cycles = cycle_analysis.cycle_participants().map(to_rule_origin).collect();
+            ir.warnings.cycles = cycle_analysis
+                .cycle_participants()
+                .map(to_rule_origin)
+                .collect();
             cycle_analysis.remove_cycles();
         };
 
@@ -550,8 +491,11 @@ impl IrProperNormalized {
 impl IrMapped {
     fn compute(mut ir: IrProperNormalized) -> Result<Self, TransformationError> {
         // remap symbols
-        let IrProperNormalized { mut bin_grammar, .. } = ir;
-        // Order rules 
+        let IrProperNormalized {
+            ref mut bin_grammar,
+            ..
+        } = ir;
+        // Order rules
         let mut ordering = HashMap::new();
         for rule in bin_grammar.rules() {
             if rule.rhs().len() == 1 {
@@ -567,61 +511,71 @@ impl IrMapped {
                 ordering.insert((left, right), ord);
             }
         }
-        let maps = {
+        {
             // which one first?
             // any way of not introducting a new scope, perhaps with an extension trait, a builder?
-            let mut remap = Remap::new(&mut *bin_grammar);
+            let mut remap = Remap::new(bin_grammar);
             remap.reorder_symbols(|left, right| {
                 // - what if left > right? does it break?
                 let should_swap = left.usize() > right.usize();
                 let ord = if should_swap {
-                    ordering.get(&(right, left)).cloned().map(|ord| ord.reverse())
+                    ordering
+                        .get(&(right, left))
+                        .cloned()
+                        .map(|ord| ord.reverse())
                 } else {
                     ordering.get(&(left, right)).cloned()
                 };
                 ord.unwrap_or(Ordering::Equal)
             });
             remap.remove_unused_symbols();
-            remap.get_mapping()
+            // Set a symbol mapping.
+            ir.common.sym_map.internal_external = Some(remap.get_mapping());
         };
-        // Create a symbol mapping.
-        let maps = InternalExternalNameMap::new(maps, ir.common.sym_map.clone());
         // Internalize the start symbol.
-        if let Some(start) = maps.internalize(bin_grammar.start()) {
+        if let Some(start) = ir.common.sym_map.internalize(bin_grammar.start()) {
             bin_grammar.set_start(start);
         } else {
             // This is the second place where a grammar is checked for being empty.
             ir.common.errors.push(TransformationError::GrammarIsEmpty);
         };
         let mut bin = BinarizedGrammar::new();
-        for _ in 0 .. bin_grammar.num_syms() {
+        for _ in 0..bin_grammar.num_syms() {
             let _: Symbol = bin.sym();
         }
         for rule in bin_grammar.rules() {
             // rhs = rule.rhs().to_owned();
             let mut history = rule.history().clone();
-            history.nullable = history.nullable.map(|(sym, pos)| (maps.internalize(sym).unwrap(), pos));
+            let sym_map = &ir.common.sym_map;
+            history.nullable = history
+                .nullable
+                .map(|(sym, pos)| (sym_map.internalize(sym).unwrap(), pos));
             bin.rule(rule.lhs()).rhs_with_history(rule.rhs(), history);
         }
         let mut remapped_nulling_grammar = BinarizedGrammar::new();
-        if let Some(start) = maps.internalize(ir.nulling_grammar.start()) {
+        if let Some(start) = ir.common.sym_map.internalize(ir.nulling_grammar.start()) {
             remapped_nulling_grammar.set_start(start);
         }
-        for _ in 0 .. bin_grammar.num_syms() {
+        for _ in 0..bin_grammar.num_syms() {
             let _: Symbol = remapped_nulling_grammar.sym();
         }
         bin.set_start(bin_grammar.start());
         for rule in ir.nulling_grammar.rules() {
-            let lhs = maps.internalize(rule.lhs()).unwrap();
+            let lhs = ir.common.sym_map.internalize(rule.lhs()).unwrap();
             let rhs: Vec<_>;
-            rhs = rule.rhs().iter().map(|sym| maps.internalize(*sym).unwrap()).collect();
+            rhs = rule
+                .rhs()
+                .iter()
+                .map(|sym| ir.common.sym_map.internalize(*sym).unwrap())
+                .collect();
             let history = rule.history().clone();
-            remapped_nulling_grammar.rule(lhs).rhs_with_history(&rhs, history);
+            remapped_nulling_grammar
+                .rule(lhs)
+                .rhs_with_history(&rhs, history);
         }
         Ok(IrMapped {
             bin_mapped_grammar: bin,
             nulling_grammar: remapped_nulling_grammar,
-            maps: maps,
             // Warning causes
             warnings: ir.warnings,
             // Final
@@ -630,9 +584,9 @@ impl IrMapped {
         })
     }
 
-    pub fn transform_from_stmts(stmts: ast::Stmts) -> Result<Self, TransformationError> {
+    pub fn transform_from_input(input: input::Input) -> Result<Self, TransformationError> {
         // let attrs = Attrs::compute(&stmts.attrs[..])?;
-        let ir = IrStmts::compute(stmts)?;
+        let ir = IrInput::compute(input)?;
         let ir = IrWithRules::compute(ir)?;
         let ir = IrPrepared::compute(ir);
         let ir = IrBinarized::compute(ir)?;
@@ -668,7 +622,7 @@ impl From<IrMapped> for Ir {
             trivial_derivation: ir.trivial_derivation,
             rules: ir.common.rules,
             type_map: ir.common.type_map,
-            maps: ir.maps,
+            maps: ir.common.sym_map,
             errors: ir.common.errors,
             // assert_type_equality: ir.common.hir.assert_type_equality.into_inner(),
             // arguments_from_outer_layer: ir.common.attrs.arguments_from_outer_layer().clone(),
@@ -682,7 +636,8 @@ impl From<IrMapped> for Ir {
 
 impl Ir {
     pub fn transform(stmts: ast::Stmts) -> Result<Self, TransformationError> {
-        IrMapped::transform_from_stmts(stmts).map(|ir| ir.into())
+        let ir_mapped = IrMapped::transform_from_stmts(stmts)?;
+        Ok(Ir::from(ir_mapped))
     }
 
     pub fn internalize(&self, symbol: Symbol) -> Option<Symbol> {
@@ -693,11 +648,7 @@ impl Ir {
         self.maps.externalize(symbol)
     }
 
-    pub fn sym_of_external(&self, symbol: Symbol) -> Option<Sym> {
-        self.maps.sym_of_external(symbol)
-    }
-
-    pub fn sym_map(&self) -> &SymMap {
-        self.maps.sym_map()
+    pub fn input_of_external(&self, symbol: Symbol) -> Option<InputSymbol> {
+        self.maps.get(symbol)
     }
 }
