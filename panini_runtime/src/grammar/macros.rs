@@ -50,7 +50,7 @@ macro_rules! grammar {
             // $(
             //     $sub_name!(grammar, $sub_content);
             // )*
-            grammar
+            grammar.lower()
         }
     )
 }
@@ -64,6 +64,9 @@ macro_rules! rule {
     };
     (( $rhs:tt * )) => {
         rule!($rhs).repeat()
+    };
+    (( $rhs0:tt $($rhsN:tt)* )) => {
+        rule!($rhs0) $(.then(rule!($rhsN)))*
     };
     ($rhs:tt [$ret:ident :: $variant:ident]=> $action:expr) => {
         rule!($rhs).action(|mut _input: Vec<$ret>| {
@@ -83,11 +86,12 @@ macro_rules! rule {
 
 macro_rules! declare_binds {
     ([$input:ident] $rhs:ident) => ();
+
     ([$input:ident] ($name:ident : $rhs:ident)) => (
         let $name = $input.pop().unwrap().$rhs();
     );
 
     ([$input:ident] ($($rhs:tt)*)) => {
-        $(declare_binds!([$input] $rhs))*
+        $(declare_binds!([$input] $rhs);)*
     };
 }

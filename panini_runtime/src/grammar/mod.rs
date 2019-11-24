@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use crate::enum_stream::EnumStreamGrammar;
 
@@ -6,6 +7,8 @@ pub use macros::*;
 
 #[macro_use]
 mod macros;
+mod lower;
+mod parser;
 
 pub struct Grammar<N, T> {
     pub rules: BTreeMap<String, Rule<N>>,
@@ -16,12 +19,13 @@ pub enum Rule<T> {
     Call(String),
     Bound(Box<Rule<T>>, String),
     Repeat(Box<Rule<T>>),
+    Product(Vec<Rule<T>>),
     Sum(Vec<Summand<T>>),
 }
 
 pub struct Summand<T> {
     rule: Rule<T>,
-    action: Box<dyn Fn(Vec<T>) -> T>,
+    action: Rc<dyn Fn(Vec<T>) -> T>,
 }
 
 impl<N, T> Grammar<N, T> {
@@ -58,15 +62,21 @@ impl<T> Rule<T> {
         Rule::Sum(vec![
             Summand {
                 rule: self,
-                action: Box::new(func),
+                action: Rc::new(func),
             }
         ])
     }
 
-    fn or(self, last: Rule<T>) -> Rule<T> {
-        let (mut summands, summands_b) = (self.summands(), last.summands());
+    fn or(self, next: Rule<T>) -> Rule<T> {
+        let (mut summands, summands_b) = (self.summands(), next.summands());
         summands.extend(summands_b.into_iter());
         Rule::Sum(summands)
+    }
+
+    pub fn then(self, next: Rule<T>) -> Rule<T> {
+        let (mut factors, factors_b) = (self.factors(), next.factors());
+        factors.extend(factors_b.into_iter());
+        Rule::Product(factors)
     }
 
     fn summands(self) -> Vec<Summand<T>> {
@@ -74,6 +84,14 @@ impl<T> Rule<T> {
             summands
         } else {
             unreachable!()
+        }
+    }
+
+    fn factors(self) -> Vec<Rule<T>> {
+        if let Rule::Product(factors) = self {
+            factors
+        } else {
+            vec![self]
         }
     }
 }

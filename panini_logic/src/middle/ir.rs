@@ -22,6 +22,7 @@ use middle::flatten_stmts::{FlattenStmts, Path, Position};
 use middle::type_collector::{Type, TypeCollector};
 use middle::warn::{WarningCauses, WarningsWithContext};
 use middle::embedded_string::EmbeddedString;
+use middle::symbol_maps::SymbolMaps;
 
 pub struct Ir {
     pub grammar: BinarizedGrammar,
@@ -30,88 +31,12 @@ pub struct Ir {
     // for actions, accessed by action ID.
     pub rules: LowerRuleRewriteResult,
     pub type_map: BTreeMap<Path, BTreeSet<Type>>,
-    pub maps: InternalExternalNameMap,
+    pub maps: SymbolMaps,
     // pub assert_type_equality: Vec<(Symbol, Type)>,
     pub attr_arguments: AttrArguments,
     pub lexer_layer: LexerLayer,
     pub trace: Trace,
     pub errors: Vec<TransformationError>,
-}
-
-#[derive(Clone)]
-pub struct SymMap {
-    pub sym_map: HashMap<Sym, Symbol>,
-    pub sym_vec: Vec<Option<Sym>>,
-}
-
-pub struct InternalExternalNameMap {
-    internal_external: Mapping,
-    sym_map: SymMap,
-}
-
-impl SymMap {
-    fn new() -> Self {
-        SymMap {
-            sym_map: HashMap::new(),
-            sym_vec: vec![],
-        }
-    }
-
-    pub fn intern(&mut self, grammar: &mut Grammar, internal_sym: &Sym) -> Symbol {
-        if let Some(&symbol) = self.sym_map.get(internal_sym) {
-            symbol
-        } else {
-            let new_sym: Symbol = grammar.sym();
-            self.insert(new_sym, internal_sym.clone());
-            new_sym
-        }
-    }
-
-    fn insert(&mut self, sym: Symbol, internal_sym: Sym) {
-        self.insert_padding(sym);
-        self.sym_vec[sym.usize()] = Some(internal_sym.clone());
-        self.sym_map.insert(internal_sym, sym);
-    }
-
-    fn insert_padding(&mut self, symbol: Symbol) {
-        if self.sym_vec.len() <= symbol.usize() {
-            let pad_len = symbol.usize() - self.sym_vec.len() + 1;
-            self.sym_vec.extend(iter::repeat(None).take(pad_len));
-        }
-    }
-
-    fn get(&self, sym: Symbol) -> Option<Sym> {
-        self.sym_vec.get(sym.usize()).and_then(|s| s.clone())
-    }
-
-    pub fn syms(&self) -> &[Option<Sym>] {
-        &self.sym_vec[..]
-    }
-}
-
-impl InternalExternalNameMap {
-    fn new(internal_external: Mapping, sym_map: SymMap) -> Self {
-        InternalExternalNameMap {
-            internal_external: internal_external,
-            sym_map,
-        }
-    }
-
-    pub fn internalize(&self, sym: Symbol) -> Option<Symbol> {
-        self.internal_external.to_internal[sym.usize()]
-    }
-
-    pub fn externalize(&self, sym: Symbol) -> Symbol {
-        self.internal_external.to_external[sym.usize()]
-    }
-
-    pub fn sym_of_external(&self, sym: Symbol) -> Option<Sym> {
-        self.sym_map.get(sym)
-    }
-
-    fn sym_map(&self) -> &SymMap {
-        &self.sym_map
-    }
 }
 
 /// Describes how the inner layer will be invoked. Most of the time, the inner layer
@@ -190,7 +115,6 @@ struct IrProperNormalized {
 pub struct IrMapped {
     bin_mapped_grammar: BinarizedGrammar,
     nulling_grammar: BinarizedGrammar,
-    maps: InternalExternalNameMap,
     // Warning causes
     warnings: WarningCauses,
     // Final
@@ -206,7 +130,7 @@ struct CommonPrepared {
     errors: Vec<TransformationError>,
     trace: Trace,
     lexer_layer: LexerLayer,
-    sym_map: SymMap,
+    sym_map: SymbolMaps,
     type_map: BTreeMap<Path, BTreeSet<Type>>,
 }
 
@@ -320,7 +244,7 @@ impl IrWithRules {
 impl IrPrepared {
     fn compute(mut ir: IrWithRules) -> Self {
         let mut grammar = Grammar::new();
-        let mut sym_map = SymMap::new();
+        let mut sym_map = SymbolMaps::new();
         let embedded_strings = ir.embedded_strings.clone();
         let lexer_layer = if !ir.embedded_strings.is_empty() {
             match ir.lexer_layer {
@@ -397,7 +321,7 @@ impl IrPrepared {
         }
     }
 
-    fn add_rule(grammar: &mut Grammar, sym_map: &mut SymMap, rule: &Rule) {
+    fn add_rule(grammar: &mut Grammar, sym_map: &mut SymbolMaps, rule: &Rule) {
         match rule {
             &Rule { lhs, ref rhs, sequence: Some((min, max)), .. } => {
                 let rhs = rhs.first().cloned().unwrap();
@@ -567,7 +491,7 @@ impl IrMapped {
                 ordering.insert((left, right), ord);
             }
         }
-        let maps = {
+        {
             // which one first?
             // any way of not introducting a new scope, perhaps with an extension trait, a builder?
             let mut remap = Remap::new(&mut *bin_grammar);
@@ -582,12 +506,11 @@ impl IrMapped {
                 ord.unwrap_or(Ordering::Equal)
             });
             remap.remove_unused_symbols();
-            remap.get_mapping()
+            // Set a symbol mapping.
+            ir.common.sym_map.internal_external = remap.get_mapping();
         };
-        // Create a symbol mapping.
-        let maps = InternalExternalNameMap::new(maps, ir.common.sym_map.clone());
         // Internalize the start symbol.
-        if let Some(start) = maps.internalize(bin_grammar.start()) {
+        if let Some(start) = ir.common.sym_map.internalize(bin_grammar.start()) {
             bin_grammar.set_start(start);
         } else {
             // This is the second place where a grammar is checked for being empty.
@@ -600,11 +523,11 @@ impl IrMapped {
         for rule in bin_grammar.rules() {
             // rhs = rule.rhs().to_owned();
             let mut history = rule.history().clone();
-            history.nullable = history.nullable.map(|(sym, pos)| (maps.internalize(sym).unwrap(), pos));
+            history.nullable = history.nullable.map(|(sym, pos)| (ir.common.sym_map.internalize(sym).unwrap(), pos));
             bin.rule(rule.lhs()).rhs_with_history(rule.rhs(), history);
         }
         let mut remapped_nulling_grammar = BinarizedGrammar::new();
-        if let Some(start) = maps.internalize(ir.nulling_grammar.start()) {
+        if let Some(start) = ir.common.sym_map.internalize(ir.nulling_grammar.start()) {
             remapped_nulling_grammar.set_start(start);
         }
         for _ in 0 .. bin_grammar.num_syms() {
@@ -612,16 +535,15 @@ impl IrMapped {
         }
         bin.set_start(bin_grammar.start());
         for rule in ir.nulling_grammar.rules() {
-            let lhs = maps.internalize(rule.lhs()).unwrap();
+            let lhs = ir.common.sym_map.internalize(rule.lhs()).unwrap();
             let rhs: Vec<_>;
-            rhs = rule.rhs().iter().map(|sym| maps.internalize(*sym).unwrap()).collect();
+            rhs = rule.rhs().iter().map(|sym| ir.common.sym_map.internalize(*sym).unwrap()).collect();
             let history = rule.history().clone();
             remapped_nulling_grammar.rule(lhs).rhs_with_history(&rhs, history);
         }
         Ok(IrMapped {
             bin_mapped_grammar: bin,
             nulling_grammar: remapped_nulling_grammar,
-            maps: maps,
             // Warning causes
             warnings: ir.warnings,
             // Final

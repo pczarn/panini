@@ -18,6 +18,7 @@ extern crate proc_macro2;
 extern crate bit_matrix;
 extern crate cfg;
 extern crate cfg_regex;
+extern crate enum_coder;
 extern crate gearley;
 
 extern crate panini_logic;
@@ -27,35 +28,37 @@ extern crate panini_logic;
 
 pub mod generate;
 pub mod instruction;
-pub mod trans;
 pub mod rs;
 
-pub use front::lexer;
+pub use panini_logic::input::attr_arguments;
 
 use std::error::Error;
 
-use front::ast::Stmts;
-use middle::error::TransformationError;
-use back::GenResult;
+use panini_logic::input::ast as logic_ast;
+use panini_logic::middle;
+use panini_logic::middle::error::TransformationError;
 
-pub fn lower<'cx>(sp: rs::Span,
-                    stmts: Stmts) -> rs::TokenStream {
-    
-    match phase_1_lower_to_ir(stmts) {
+use input::ast;
+
+pub fn lower<'cx>(stmts: ast::Stmts) -> rs::TokenStream {
+    let (tables, logic_stmts) = phase_1_lower_stmts(stmts);
+    match phase_2_lower_to_ir(stmts) {
         Ok(ir) => {
-            match phase_2_translate(ir) {
-                GenResult::Parser(expr) => {
-                    expr.parse().unwrap()
-                }
-                GenResult::Lexer(stmts) => {
-                    stmts.parse().unwrap()
-                }
-            }
+            let instructions = phase_3_translate(ir);
+            let lower_instructions = phase_4_lower_instructions(tables, instructions);
+            phase_5_generate(tables, lower_instructions)
+        }
+        Err(err) => {
+            report_errors(err);
         }
     }
 }
 
-fn phase_1_lower_to_ir(stmts: Stmts) -> rs::TokenStream {
+fn phase_1_lower_stmts(stmts: ast::Stmts) -> (logic_ast::Stmts, Tables) {
+    let mut 
+}
+
+fn phase_2_lower_to_ir(stmts: logic_ast::Stmts) -> Ir {
     match middle::ir::IrMapped::transform_from_stmts(stmts) {
         Ok(ir) => {
             // ir.report_warnings(ecx);

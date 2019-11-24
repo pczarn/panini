@@ -6,6 +6,7 @@ use gearley::grammar::Grammar;
 
 use input::FragmentId;
 use middle::flatten_stmts::{Path, Position};
+use middle::symbol_maps::OuterSymbol;
 use middle::trace::Trace;
 use middle::ir::SymMap;
 
@@ -53,12 +54,6 @@ enum Elem {
     },
     Initial,
     End,
-}
-
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Sym {
-    Fragment(FragmentId),
-    FromPath(Path),
 }
 
 impl RuleValue {
@@ -226,7 +221,7 @@ impl<'a> RuleRewrite<'a> {
 }
 
 impl RuleRewriteResult {
-    pub fn lower(self, grammar: &mut Grammar, sym_map: &mut SymMap) -> LowerRuleRewriteResult {
+    pub fn lower(self, grammar: &mut Grammar, symbol_maps: &mut SymbolMaps) -> LowerRuleRewriteResult {
         let mut result = LowerRuleRewriteResult {
             rules: vec![],
             new_symbols: self.new_symbols,
@@ -235,14 +230,14 @@ impl RuleRewriteResult {
             match rule_value {
                 RuleValue { lhs, rhs, sequence: Some((min, max)), traces } => {
                     if rhs.len() == 1 {
-                        let lhs = sym_map.intern(grammar, &lhs);
+                        let lhs = symbols_map.intern(grammar, &lhs);
                         let rhs = rhs.get(&0).unwrap();
-                        let rhs = sym_map.intern(grammar, rhs);
+                        let rhs = symbols_map.intern(grammar, rhs);
                         result.rules.push(Rule { lhs, rhs: vec![rhs], sequence: Some((min, max)), traces });
                     } else {
                         let intermediate: Symbol = grammar.sym();
-                        let lhs = sym_map.intern(grammar, &lhs);
-                        let rhs = rhs.values().map(|sym| sym_map.intern(grammar, sym)).collect();
+                        let lhs = symbols_map.intern(grammar, &lhs);
+                        let rhs = rhs.values().map(|sym| symbols_map.intern(grammar, sym)).collect();
                         result.rules.push(Rule { lhs: intermediate, rhs, sequence: None, traces });
                         result.rules.push(Rule {
                             lhs,
@@ -253,8 +248,8 @@ impl RuleRewriteResult {
                     }
                 }
                 RuleValue { lhs, rhs, sequence: None, traces } => {
-                    let lhs = sym_map.intern(grammar, &lhs);
-                    let rhs = rhs.values().map(|sym| sym_map.intern(grammar, sym)).collect();
+                    let lhs = symbols_map.intern(grammar, &lhs);
+                    let rhs = rhs.values().map(|sym| symbols_map.intern(grammar, sym)).collect();
                     result.rules.push(Rule { lhs, rhs, sequence: None, traces });
                 }
             }

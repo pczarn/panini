@@ -93,8 +93,8 @@ pub fn dummy_spanned<T>(elem: T) -> Spanned<T> {
     respan(Span::call_site(), elem)
 }
 
-pub struct Attribute;
-pub struct ExtCtxt;
+// pub struct Attribute;
+// pub struct ExtCtxt;
 
-#[derive(Hash, Eq, PartialEq)]
-pub struct Name(u32);
+// #[derive(Hash, Eq, PartialEq)]
+// pub struct Name(u32);

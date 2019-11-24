@@ -6,3 +6,6 @@ edition = "2018"
 
 [dependencies]
 panini_logic = "0.0.0"
+
+[patch.crates-io]
+panini_logic = { path = "/home/piotr/src/panini/panini_logic" }

@@ -8,6 +8,14 @@ pub struct InstructionList {
     pub list: Vec<Instruction>,
 }
 
+impl InstructionList {
+    pub fn new() -> Self {
+        InstructionList {
+            list: vec![]
+        }
+    }
+}
+
 enum_coder! {
     #[derive(Debug, Eq, PartialEq)]
     pub enum Instruction {
@@ -21,6 +29,7 @@ enum_coder! {
 
         MakeTerminalAccessorStruct {
             number: usize,
+            map: HashMap<FragmentId, Symbol>,
         },
 
         // // defines:
@@ -83,8 +92,17 @@ enum_coder! {
                 terminal,
             }
         }
+        let map = translator.ir.sym_map().sym_map.iter().filter_map(|key, value| {
+            match key {
+                &Sym::Fragment(fragment_id) => {
+                    Some((fragment_id, value))
+                }
+                &Sym::FromPath => None
+            }
+        }).collect();
         MakeTerminalAccessorStruct {
             number: translator.terminals.len(),
+            map,
         }
 
         // ConcatSeparated(ir.rules.len(), quote! { , });

@@ -1,6 +1,6 @@
 [package]
 name = "panini_codegen"
-version = "0.0.0"
+version = "0.0.1"
 
 description = "A parser generator. This package handles code generation for the `grammar` macro."
 authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
@@ -13,22 +13,24 @@ name = "panini_codegen"
 
 [dependencies]
 log = "0.4"
-env_logger = "0.6"
-quote = { path = "../../quote/" }
-proc-macro2 = { path = "../../proc-macro2/" }
-bit-matrix = "0.2"
-cfg = "0.3"
-cfg-regex = "0.0"
+env_logger = "0.7"
+quote = "1.0"
+proc-macro2 = "1.0"
+bit-matrix = "0.4"
+cfg = "0.4"
+cfg-regex = "0.1"
 gearley = "0.0"
-serde_cbor = "0.9"
+enum_coder = "0.0"
+serde_cbor = "0.10"
+panini_logic = "0.0"
 
 [dev-dependencies]
-maplit = "0.1"
+maplit = "1.0"
 
-[patch.crates-io]
-cfg-regex = { path = "/home/piotr/src/cfg-regex" }
-panini_macros_snapshot = { path = "/home/piotr/src/panini-snapshot/panini_macros_snapshot" }
-panini_logic = { path = "/home/piotr/src/panini/panini_logic" }
-gearley = { path = "/home/piotr/src/gearley" }
-cfg = { path = "/home/piotr/src/cfg" }
-regex_dfa = { path = "/home/piotr/src/regex-dfa" }
+# [patch.crates-io]
+# cfg-regex = { path = "/home/piotr/src/cfg-regex" }
+# panini_macros_snapshot = { path = "/home/piotr/src/panini-snapshot/panini_macros_snapshot" }
+# panini_logic = { path = "/home/piotr/src/panini/panini_logic" }
+# gearley = { path = "/home/piotr/src/gearley" }
+# cfg = { path = "/home/piotr/src/cfg" }
+# regex_dfa = { path = "/home/piotr/src/regex-dfa" }

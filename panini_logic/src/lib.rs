@@ -23,48 +23,34 @@ extern crate enum_coder;
 #[macro_use]
 extern crate maplit;
 
-// #[path = "middle/ecs.rs"]
-// mod ecs;
-
-// pub mod front;
 pub mod middle;
-// pub mod back;
 pub mod input;
 pub mod output;
 
-// pub use front::lexer;
-
-// use std::error::Error;
-
+use middle::ir::Ir;
+use middle::error::TransformationError;
 use input::ast::Stmts;
-// use output::Instruction;
+use output::instruction::InstructionList;
+use output::translator::IrTranslator;
 
-pub fn lower(_stmts: Stmts) {
-    unimplemented!()
+pub fn process(stmts: Stmts) -> Result<InstructionList, TransformationError> {
+    match phase_1_lower_to_ir(stmts) {
+        Ok(ir) => {
+            Ok(phase_2_translate(ir))
+        }
+        Err(error) => {
+            Err(error)
+        }
+    }
 }
 
-// pub fn lower(stmts: Stmts) -> Result<Vec<Instruction>, TransformationError> {
-//     match phase_1_lower_to_ir(stmts) {
-//         Ok(ir) => {
-//             phase_2_translate(ir.into())
-//         }
-//         Err(error) => {
-//             Err(error)
-//         }
-//     }
-// }
+fn phase_1_lower_to_ir(stmts: Stmts) -> Result<Ir, TransformationError> {
+    middle::ir::IrMapped::transform_from_stmts(stmts).map(|ir_mapped| ir_mapped.into())
+}    
 
-// fn phase_1_lower_to_ir(stmts: Stmts) -> Result<IrMapped, TransformationError> {
-//     middle::ir::IrMapped::transform_from_stmts(stmts)
-// }    
-
-// fn phase_2_translate(ir: Ir) -> Vec<Instruction> {
-//     // ir.report_warnings(ecx);
-//     // if let Some(errors) = ir.get_errors() {
-//     //     Err(errors)
-//     // }
-//     back::IrTranslator::new(ir).generate()
-// }
+fn phase_2_translate(ir: Ir) -> InstructionList {
+    IrTranslator::new(ir).generate()
+}
 
 // fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError) {
 //     match error {
