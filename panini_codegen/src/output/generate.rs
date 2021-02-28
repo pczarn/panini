@@ -2,54 +2,16 @@
 
 use std::iter;
 
+use proc_macro2::{Literal, TokenTree};
 use cfg::symbol::Symbol;
 use cfg_regex::Class;
 use gearley::grammar::InternalGrammar;
 
-use instruction::{LowerInstructionList, LowerInstruction::{self, *}};
 use rs;
-use proc_macro2::{Literal, TokenTree};
-// use quote::ToTokens;
+use instruction::{LowerInstructionList, LowerInstruction::{self, *}};
+use interpreter::
 
-// Info for generation.
-
-struct InterpreterState {
-  stack: Vec<rs::TokenStream>,
-}
-
-impl LowerInstructionList {
-    pub fn generate(self) -> rs::TokenStream {
-        let mut state = InterpreterState {
-            stack: vec![],
-        };
-        for instruction in self.list {
-            run_instruction(&mut state, instruction);
-        }
-        let result = state.stack.pop().expect("interpreter expected at least one result");
-        assert!(state.stack.is_empty(), "interpreter expected exactly one result");
-        result
-    }
-}
-
-impl InterpreterState {
-    fn pop(&mut self) -> rs::TokenStream {
-        self.stack.pop().expect("stack is empty")
-    }
-
-    fn pop_n(&mut self, count: usize) -> Vec<rs::TokenStream> {
-        let n = self.stack.len().checked_sub(count).expect("stack underflow??");
-        self.stack.split_off(n)
-    }
-
-    fn peek(&mut self) -> rs::TokenStream {
-        self.stack.last().expect("stack is empty").clone()
-    }
-}
-
-fn run_instruction(state: &mut InterpreterState, instruction: LowerInstruction) {
-    let val = eval_instruction(state, instruction);
-    state.stack.push(val);
-}
+// Generation.
 
 fn eval_instruction(state: &mut InterpreterState, instruction: LowerInstruction) -> rs::TokenStream {
     match instruction {
@@ -87,7 +49,7 @@ fn eval_instruction(state: &mut InterpreterState, instruction: LowerInstruction)
                 }
             }
         }
-        MakeTerminalAccessorStruct => {
+        MakeTerminalAccessorStruct { fn_count, map } => {
             let fns = state.pop();
             quote! {
                 struct TerminalAccessor;
@@ -506,26 +468,30 @@ fn eval_instruction(state: &mut InterpreterState, instruction: LowerInstruction)
         //         #lhs ::= #rhs;
         //     }
         // }
-        // MakeLowerLayer {
-        //     lexer_attr,
-        //     terminal_names,
-        //     lexer_name,
-        //     explicit_lexer_invocation_content,
-        // } => {
-        //     let implicit_rules = state.pop();
-        //     // The lexer invocation.
-        //     quote! {
-        //         // ########### QUOTED CODE #########################
-        //         // Inner layer.
-        //         #lexer_name! {
-        //             // Arguments for the inner layer.
-        //             #![#lexer_attr(#(#terminal_names),*)]
-        //             #implicit_rules
-        //             #explicit_lexer_invocation_content
-        //         }
-        //         // ########### END QUOTED CODE
-        //     }
-        // }
+        MakeLowerLayerArgs { terminal_names } => {
+            quote! {
+                #(#terminal_names),*
+            }
+        } 
+        MakeLowerLayer {
+            lexer_attr,
+            lexer_name,
+            explicit_lexer_invocation_content,
+        } => {
+            let lexer_attr_args = state.pop();
+            let implicit_rules = state.pop();
+            // The lexer invocation.
+            quote! {
+                // Inner layer.
+                #lexer_name! {
+                    // Arguments for the inner layer.
+                    #![#lexer_attr(#lexer_attr_args)]
+                    #implicit_rules
+                    #explicit_lexer_invocation_content
+                }
+                // ########### END QUOTED CODE
+            }
+        }
         // MakeLowerLayerAsIdentity {
         //     lower_eval_closure,
         // } => {
@@ -573,6 +539,94 @@ fn eval_instruction(state: &mut InterpreterState, instruction: LowerInstruction)
         //         top_result(#eval_closure)
         //     }
         // }
+
+        MakeStaticInfo {
+            serialized_grammar,
+            trace_ids,
+            trace_map,
+            trace_tokens,
+            sym_names,
+        } => {
+            quote! {
+                static STATIC_INFO: StaticInfo = StaticInfo {
+                    serialized_grammar: #storage_str,
+                    sym_names: &[
+                        #(#sym_names),*
+                    ],
+                    trace_info: TraceInfo {
+                        ids: &[
+                            #(#trace_ids),*
+                        ],
+                        map: &[
+                            #(&[#(#trace_map),*]),*
+                        ],
+                        tokens: &[
+                            #(&[#(#trace_tokens),*]),*
+                        ],
+                    }
+                };
+            }
+        }
+
+        MakeScaffolding => {
+            quote! {
+                struct Language<'g, I> {
+                    grammar: Rc<grammar::InternalGrammar>,
+                    bocage: Bocage<'g, 'g, Rc<grammar::InternalGrammar>, I::Node, #Value<I::Infer>>>,
+                }
+
+                struct Parse<'g, I> where I: Infer {
+                    grammar: &'g grammar::InternalGrammar,
+                    // checkpoint: Checkpoint<I::Leaf, Value<I>>,
+                    current_num_scanned: usize,
+                    store: Arena<Value<I::Infer>>,
+                    recognizer: Recognizer<'g, Bocage<&'g grammar::InternalGrammar>>,
+                    // traversal: TraversalUnordered<'g, I::Leaf, Value<I>>,
+                    inference_marker: ::std::marker::PhantomData<I>,
+                }
+
+                impl<'g, I> Language<'g, I> {
+                    fn new() -> Language<'g, I>
+                    #fn_Language_new
+
+                    fn parse<'g, I>(&'g self) -> Parse<'g, I>
+                        where I: InferTree<'g> + 'g
+                    #fn_Language_parse
+                }
+
+                impl Parse<'g, I> where I: Infer {
+                    fn #begin_input(&mut self)
+                    #fn_Parse_begin_input
+
+                    // LATM handling.
+                    fn #begin_earleme(&mut self)
+                    #fn_Parse_begin_earleme
+
+                    fn #scan_tok(&mut self, token: Symbol, value: I::Node)
+                    #fn_Parse_scan_tok
+
+                    fn #end_earleme(&mut self) -> bool
+                    #fn_Parse_end_earleme
+
+                    fn #end_input(&mut self)
+                    #fn_Parse_end_input
+                }
+
+                impl Parse<'g, I> {
+                    fn fmt_exhaustion(&self, fmt: &mut fmt::Formatter, input_pos: usize)
+                        -> Result<(), fmt::Error>
+                    #fn_Parse_fmt_exhaustion
+                }
+
+                impl<'g, I> Iterator for Parse<'g, I>
+                    where I: Infer,
+                {
+                    type Item = &'g #start_type;
+                    fn next(&mut self) -> Option<Self::Item>
+                    #fn_Parse_next
+                }
+            }
+        }
 
         // // final expression
         // OutermostLayer => {

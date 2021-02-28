@@ -5,7 +5,7 @@ macro_rules! grammar {
             $lhs:ident
             ->
             ($rule_ty:ty)
-            ::= 
+            ::=
             $(
                 $rule:tt
                 =>

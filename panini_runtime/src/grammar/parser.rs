@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use panini_logic::input::{FragmentId, ExprId};
-use panini_logic::input::ast::{Stmts, Stmt, Alternative, Action, Rhs, RhsAst, RhsElement, Sequence};
+use panini_logic::input::ast::{
+    Action, Alternative, Rhs, RhsAst, RhsElement, Sequence, Stmt, Stmts,
+};
 use panini_logic::input::attr_arguments::AttrArguments;
+use panini_logic::input::{ExprId, FragmentId};
 use panini_logic::output::instruction::InstructionList;
 
 use crate::enum_stream::EnumStreamGrammar;
@@ -48,7 +50,10 @@ impl<N> Tables<N> {
     }
 }
 
-impl<N, T> Parser<N, T> where T: Copy {
+impl<N, T> Parser<N, T>
+where
+    T: Copy,
+{
     pub(super) fn new(sub: EnumStreamGrammar<T>) -> Parser<N, T> {
         Parser {
             tables: Tables::new(),
@@ -57,8 +62,8 @@ impl<N, T> Parser<N, T> where T: Copy {
         }
     }
 
-    pub(super) fn process(&mut self, stmts: Stmts) {
-        self.instruction_list = panini_logic::process(stmts).unwrap();
+    pub(super) fn process(&mut self, input_tree: InputTree) {
+        self.instruction_list = panini_logic::process(input_tree).unwrap();
     }
 
     pub fn parse(&self, tokens: &[T]) -> ParseResult<N, T> {
@@ -79,4 +84,3 @@ impl<N, T> Parser<N, T> where T: Copy {
         // }
     }
 }
-

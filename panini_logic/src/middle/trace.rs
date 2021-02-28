@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use input::ast::{Stmts, Rhs, RhsAst};
+use input::ast::{Rhs, RhsAst, Stmts};
 use input::FragmentId;
 use middle::flatten_stmts::{Path, Position};
 
@@ -51,9 +51,7 @@ impl TraceToken {
             &TraceToken::Quote => Cow::Borrowed("\""),
             &TraceToken::String(ref name) => Cow::Owned(name.as_str().to_string()),
 
-            &TraceToken::Fragment(fragment_id) => {
-                Cow::Owned(fragment_names[&fragment_id].clone())
-            },
+            &TraceToken::Fragment(fragment_id) => Cow::Owned(fragment_names[&fragment_id].clone()),
         }
     }
 }
@@ -73,16 +71,14 @@ impl Trace {
         for (stmt_idx, stmt) in stmts.stmts.iter().enumerate() {
             let mut last_level = None;
             let start_path = Path {
-                position: vec![
-                    Position::IdxWithFragment {
-                        idx: stmt_idx,
-                        fragment: stmt.lhs,
-                    },
-                ],
+                position: vec![Position::IdxWithFragment {
+                    idx: stmt_idx,
+                    fragment: stmt.lhs,
+                }],
             };
             self.stmt_positions.push(StmtTokenPosition {
                 lhs: Some(stmt.lhs),
-                position: self.tokens.len()
+                position: self.tokens.len(),
             });
             for (alternative_idx, (level, ref rhs, ref _action)) in stmt.body.iter().enumerate() {
                 let mut path = start_path.clone();
@@ -157,7 +153,7 @@ impl Trace {
                     if sequence.min == 0 && sequence.max == None {
                         self.tokens.insert(star_or_plus_path, TraceToken::Star);
                     } else if sequence.min == 1 && sequence.max == None {
-                        self.tokens.insert(star_or_plus_path, TraceToken::Plus);                        
+                        self.tokens.insert(star_or_plus_path, TraceToken::Plus);
                     }
                     self.flatten_rhs(path, &sequence.rhs);
                 }
@@ -195,7 +191,10 @@ impl Trace {
     pub fn traces_for_path(&self, path: &Path) -> (usize, usize) {
         let mut max_path = path.clone();
         max_path.position.push(Position::Max);
-        (self.tokens.range(.. path).count(), self.tokens.range(.. max_path).count())
+        (
+            self.tokens.range(..path).count(),
+            self.tokens.range(..max_path).count(),
+        )
     }
 
     pub fn tokens(&self) -> &BTreeMap<Path, TraceToken> {
@@ -203,8 +202,9 @@ impl Trace {
     }
 
     pub fn stringify_tokens(&self, fragment_names: &BTreeMap<FragmentId, String>) -> Vec<String> {
-        self.tokens.iter().map(|(_, token)| {
-            token.as_str(fragment_names).to_string()
-        }).collect()
+        self.tokens
+            .iter()
+            .map(|(_, token)| token.as_str(fragment_names).to_string())
+            .collect()
     }
 }

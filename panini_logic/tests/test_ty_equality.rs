@@ -14,7 +14,7 @@ use panini_logic::middle::ir::Ir;
 use panini_logic::middle::error::TransformationError;
 use panini_logic::middle::flatten_stmts::{FlattenStmts, Path, Position};
 use panini_logic::middle::trace::{Trace, TraceToken};
-use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleValue};
+use panini_logic::middle::rule_rewrite::{RuleRewrite, InputSymbol, InputRule};
 use panini_logic::middle::type_collector::{TypeCollector, Type};
 
 #[test]
@@ -76,46 +76,24 @@ fn test_ty_equality_failure() {
     flatten.flatten_stmts(&stmts);
 
     let expected_paths = vec![
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Alternative(0),
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: a,
-                },
-            ]
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Alternative(0),
-                Position::IdxWithFragment {
-                    idx: 1,
-                    fragment: b,
-                },
-            ]
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Alternative(1),
-                Position::Sequence { min: 0, max: None },
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: a,
-                }
-            ]
-        },
+        path![
+            Position::StmtFragment(start),
+            Position::Alternative(0),
+            Position::Idx(0),
+            Position::Fragment(a),
+        ],
+        path![
+            Position::StmtFragment(start),
+            Position::Alternative(0),
+            Position::Idx(1),
+            Position::Fragment(b),
+        ],
+        path![
+            Position::StmtFragment(start),
+            Position::Alternative(1),
+            Position::Sequence { min: 0, max: None },
+            Position::Fragment(a),
+        ],
     ];
     assert_eq!(flatten.paths, expected_paths);
 
@@ -172,9 +150,9 @@ fn test_ty_equality_failure() {
                 Position::IdxWithFragment { idx: 0, fragment: start },
                 Position::Alternative(0),
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a), 1 => InputSymbol::Fragment(b) },
             sequence: None,
             traces: btreemap! { Some(0) => 0, Some(1) => 1, Some(2) => 2 },
         },
@@ -184,9 +162,9 @@ fn test_ty_equality_failure() {
                 Position::Alternative(1),
                 Position::Sequence { min: 0, max: None }
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a) },
             sequence: Some((0, None)),
             traces: btreemap! { Some(0) => 3, Some(1) => 4, None => 5 },
         }
@@ -245,7 +223,6 @@ fn test_ty_equality_failure() {
     };
     let mut collector = TypeCollector::new();
     collector.collect(flatten.paths);
-    collector.simplify_tuples();
     assert_eq!(collector.types, expected_types);
 
     let ir = Ir::transform(stmts).unwrap();
@@ -403,9 +380,9 @@ fn test_ty_equality_failure_different_stmts() {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: start },
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a), 1 => InputSymbol::Fragment(b) },
             sequence: None,
             traces: btreemap! { Some(0) => 0, Some(1) => 1, Some(2) => 2 },
         },
@@ -414,9 +391,9 @@ fn test_ty_equality_failure_different_stmts() {
                 Position::IdxWithFragment { idx: 1, fragment: start },
                 Position::Sequence { min: 0, max: None }
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a) },
             sequence: Some((0, None)),
             traces: btreemap! { Some(0) => 2, Some(1) => 3, None => 4 },
         }
@@ -424,7 +401,7 @@ fn test_ty_equality_failure_different_stmts() {
     assert_eq!(rewrite.rules, expected_rules);
 
     // Joined paths
-    let joined_paths = flatten.join_stmts();
+    let joined_paths = flatten.paths();
 
     let expected_joined_paths = vec![
         Path {
@@ -513,7 +490,6 @@ fn test_ty_equality_failure_different_stmts() {
     };
     let mut collector = TypeCollector::new();
     collector.collect(joined_paths);
-    collector.simplify_tuples();
     assert_eq!(collector.types, expected_types);
 
     let ir = Ir::transform(stmts).unwrap();

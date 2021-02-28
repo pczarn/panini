@@ -1,5 +1,6 @@
 extern crate cfg;
 extern crate gearley;
+#[macro_use]
 extern crate panini_logic;
 #[macro_use]
 extern crate maplit;
@@ -12,7 +13,7 @@ use panini_logic::input::{Stmts, Stmt, RhsAst, Rhs, RhsElement, Action, Sequence
 use panini_logic::input::attr_arguments::AttrArguments;
 use panini_logic::middle::flatten_stmts::{FlattenStmts, Path, Position};
 use panini_logic::middle::trace::{Trace, TraceToken};
-use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleValue};
+use panini_logic::middle::rule_rewrite::{RuleRewrite, InputSymbol, InputRule};
 use panini_logic::middle::type_collector::{TypeCollector, Type};
 
 #[test]
@@ -65,36 +66,22 @@ fn test_bound_deep_sequence() {
     flatten.flatten_stmts(&stmts);
 
     let expected_paths = vec![
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Bind(bind_s),
-                Position::Sequence { min: 0, max: None },
-                Position::Bind(bind_a),
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: a,
-                },
-            ]
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Bind(bind_s),
-                Position::Sequence { min: 0, max: None },
-                Position::Bind(bind_b),
-                Position::IdxWithFragment {
-                    idx: 1,
-                    fragment: b,
-                },
-            ]
-        },
+        path![
+            Position::StmtFragment(start),
+            Position::StmtIdx(0),
+            Position::Bind(bind_s),
+            Position::Sequence { min: 0, max: None },
+            Position::Bind(bind_a),
+            Position::Fragment(a),
+        ],
+        path![
+            Position::StmtFragment(start),
+            Position::StmtIdx(0),
+            Position::Bind(bind_s),
+            Position::Sequence { min: 0, max: None },
+            Position::Bind(bind_b),
+            Position::Fragment(b),
+        ],
     ];
     assert_eq!(flatten.paths, expected_paths);
 
@@ -161,9 +148,9 @@ fn test_bound_deep_sequence() {
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
                 Position::Sequence { min: 0, max: None }
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a), 1 => InputSymbol::Fragment(b) },
             sequence: Some((0, None)),
             traces: btreemap! { Some(0) => 1, Some(1) => 2, Some(2) => 3, None => 5 }
         },
@@ -172,56 +159,38 @@ fn test_bound_deep_sequence() {
 
     // Types
     let expected_types = btreemap! {
-        Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: 0 }
-            ]
-        } => btreeset! {
-            Type::Struct {
-                fields: btreemap! {
-                    Path {
-                        position: vec![Position::Bind(0)]
-                    } => Type::Sequence {
-                        ty: Box::new(Type::Struct {
-                            fields: btreemap! {
-                                Path {
-                                    position: vec![
-                                        Position::Bind(1),
-                                    ]
-                                } => Type::TypeOfFragment { fragment: a },
-                                Path {
-                                    position: vec![
-                                        Position::Bind(2),
-                                    ]
-                                } => Type::TypeOfFragment { fragment: b },
-                            }
-                        })
-                    }
+        path![Position::IdxWithFragment { idx: 0, fragment: 0 }] => Type::Struct {
+            fields: btreemap! {
+                path![Position::Bind(0)] => Type::Sequence {
+                    ty: Box::new(Type::Struct {
+                        fields: btreemap! {
+                            path![Position::Bind(1)] => Type::TypeOfFragment { fragment: a },
+                            path![Position::Bind(2)] => Type::TypeOfFragment { fragment: b },
+                        }
+                    })
                 }
             }
         },
-        Path {
-            position: vec![
+        path![
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
                 Position::Bind(0)
             ]
-        } => btreeset! {
-            Type::Sequence {
-                ty: Box::new(Type::Struct {
-                    fields: btreemap! {
-                        Path {
-                            position: vec![
-                                Position::Bind(1),
-                            ]
-                        } => Type::TypeOfFragment { fragment: a },
-                        Path {
-                            position: vec![
-                                Position::Bind(2),
-                            ]
-                        } => Type::TypeOfFragment { fragment: b }
-                    }
-                })
-            }
+        => Type::Sequence {
+            ty: Box::new(Type::Struct {
+                fields: btreemap! {
+                    Path {
+                        position: vec![
+                            Position::Bind(1),
+                        ]
+                    } => Type::TypeOfFragment { fragment: a },
+                    Path {
+                        position: vec![
+                            Position::Bind(2),
+                        ]
+                    } => Type::TypeOfFragment { fragment: b }
+                }
+            })
+        },
             // Type::Struct {
             //     fields: btreemap! {
             //         Path {
@@ -246,23 +215,20 @@ fn test_bound_deep_sequence() {
             //         }
             //     }
             // }
-        },
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
                 Position::Bind(0),
                 Position::Sequence { min: 0, max: None }
             ]
-        } => btreeset! {
-            Type::Struct {
-                fields: btreemap! {
-                    Path {
-                        position: vec![Position::Bind(1)]
-                    } => Type::TypeOfFragment { fragment: 1 },
-                    Path {
-                        position: vec![Position::Bind(2)]
-                    } => Type::TypeOfFragment { fragment: 2 }
-                }
+        } => Type::Struct {
+            fields: btreemap! {
+                Path {
+                    position: vec![Position::Bind(1)]
+                } => Type::TypeOfFragment { fragment: 1 },
+                Path {
+                    position: vec![Position::Bind(2)]
+                } => Type::TypeOfFragment { fragment: 2 }
             }
         },
         Path {
@@ -272,9 +238,7 @@ fn test_bound_deep_sequence() {
                 Position::Sequence { min: 0, max: None },
                 Position::Bind(1)
             ]
-        } => btreeset! {
-            Type::TypeOfFragment { fragment: 1 }
-        },
+        } => Type::TypeOfFragment { fragment: 1 },
         Path {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: 0 },
@@ -282,12 +246,9 @@ fn test_bound_deep_sequence() {
                 Position::Sequence { min: 0, max: None },
                 Position::Bind(2)
             ]
-        } => btreeset! {
-            Type::TypeOfFragment { fragment: 2 }
-        }
+        } => Type::TypeOfFragment { fragment: 2 },
     };
     let mut collector = TypeCollector::new();
     collector.collect(flatten.paths);
-    collector.simplify_tuples();
-    assert_eq!(collector.types, expected_types);
+    assert_eq!(collector.final_types, expected_types);
 }

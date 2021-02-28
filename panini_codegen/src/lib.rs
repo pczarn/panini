@@ -26,8 +26,9 @@ extern crate panini_logic;
 // #[path = "middle/ecs.rs"]
 // mod ecs;
 
-pub mod generate;
-pub mod instruction;
+pub mod input;
+pub mod middle;
+pub mod output;
 pub mod rs;
 
 pub use panini_logic::input::attr_arguments;
@@ -38,27 +39,25 @@ use panini_logic::input::ast as logic_ast;
 use panini_logic::middle;
 use panini_logic::middle::error::TransformationError;
 
-use input::ast;
+use { input, middle, output };
 
-pub fn lower<'cx>(stmts: ast::Stmts) -> rs::TokenStream {
+pub fn lower(stmts: ast::Stmts) -> Result<rs::TokenStream, TransformationError> {
     let (tables, logic_stmts) = phase_1_lower_stmts(stmts);
-    match phase_2_lower_to_ir(stmts) {
-        Ok(ir) => {
-            let instructions = phase_3_translate(ir);
-            let lower_instructions = phase_4_lower_instructions(tables, instructions);
-            phase_5_generate(tables, lower_instructions)
-        }
-        Err(err) => {
-            report_errors(err);
-        }
-    }
+    let ir = phase_2_lower_to_ir(stmts)?;
+    let instructions = phase_3_translate(&ir);
+    let lower_instructions = phase_4_lower_instructions(&ir, &tables, instructions);
+    Ok(phase_5_generate(&tables, lower_instructions))
 }
 
-fn phase_1_lower_stmts(stmts: ast::Stmts) -> (logic_ast::Stmts, Tables) {
+pub fn lower_or_report_error(stmts: ast::Stmts) -> rs::TokenStream {
+    lower(stmts).unwrap_or_else(report_error)
+}
+
+pub fn phase_1_lower_stmts(stmts: ast::Stmts) -> (logic_ast::Stmts, Tables) {
     let mut 
 }
 
-fn phase_2_lower_to_ir(stmts: logic_ast::Stmts) -> Ir {
+pub fn phase_2_lower_to_ir(stmts: logic_ast::Stmts) -> Ir {
     match middle::ir::IrMapped::transform_from_stmts(stmts) {
         Ok(ir) => {
             // ir.report_warnings(ecx);
@@ -95,6 +94,19 @@ fn phase_2_lower_to_ir(stmts: logic_ast::Stmts) -> Ir {
             rs::TokenStream::new()
         }
     }
+}
+
+pub fn phase_3_translate(ir: &middle::Ir) -> Vec<Instruction> {
+
+}
+
+pub fn phase_4_lower_instructions(ir: &Ir, tables: &Tables, instructions: Vec<Instruction>) -> Vec<LowerInstruction> {
+    output::instruction::translate(ir, tables, instructions)
+
+}
+
+pub fn phase_5_generate(tables: &Tables, lower_instructions: Vec<LowerInstruction>) -> rs::TokenStream {
+
 }
 
 // fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError) {

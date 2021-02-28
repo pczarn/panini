@@ -12,7 +12,7 @@ use panini_logic::input::{Stmts, Stmt, RhsAst, Rhs, RhsElement, Action, Sequence
 use panini_logic::input::attr_arguments::AttrArguments;
 use panini_logic::middle::flatten_stmts::{FlattenStmts, Path, Position};
 use panini_logic::middle::trace::{Trace, TraceToken};
-use panini_logic::middle::rule_rewrite::{RuleRewrite, Sym, RuleValue};
+use panini_logic::middle::rule_rewrite::{RuleRewrite, InputSymbol, InputRule};
 use panini_logic::middle::type_collector::{TypeCollector, Type};
 
 #[test]
@@ -163,9 +163,9 @@ fn test_flatten() {
             position: vec![
                 Position::IdxWithFragment { idx: 0, fragment: start },
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(start),
-            rhs: btreemap! { 0 => Sym::Fragment(a), 1 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(start),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(a), 1 => InputSymbol::Fragment(b) },
             sequence: None,
             traces: btreemap! { Some(0) => 0, Some(1) => 1, Some(2) => 2 },
         },
@@ -174,9 +174,9 @@ fn test_flatten() {
                 Position::IdxWithFragment { idx: 1, fragment: a },
                 Position::Sequence { min: 0, max: None }
             ]
-        } => RuleValue {
-            lhs: Sym::Fragment(a),
-            rhs: btreemap! { 0 => Sym::Fragment(b) },
+        } => InputRule {
+            lhs: InputSymbol::Fragment(a),
+            rhs: btreemap! { 0 => InputSymbol::Fragment(b) },
             sequence: Some((0, None)),
             traces: btreemap! { Some(0) => 2, Some(1) => 3, None => 4 },
         }
@@ -217,6 +217,5 @@ fn test_flatten() {
     };
     let mut collector = TypeCollector::new();
     collector.collect(flatten.paths);
-    collector.simplify_tuples();
     assert_eq!(collector.types, expected_types);
 }

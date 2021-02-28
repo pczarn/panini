@@ -3,11 +3,11 @@
 use cfg::Symbol;
 
 use input::attr_arguments::AttrArguments;
-use middle::rule_rewrite::RuleValue;
+use middle::rule_rewrite::InputRule;
 
 pub struct WarningsWithContext<'a> {
     pub attrs: &'a AttrArguments,
-    pub rules: &'a [RuleValue],
+    pub rules: &'a [InputRule],
     pub causes: &'a WarningCauses,
 }
 
@@ -19,13 +19,12 @@ pub struct WarningCauses {
 }
 
 const UNPRODUCTIVE_RULE: &'static str = "unproductive rule.";
-const UNREACHABLE_RULE:  &'static str = "unreachable rule.";
-const CYCLE:             &'static str = "cycle among unit rules.";
-const CYCLE_NULLABLE:    &'static str = "cycle that includes a nullable rule";
-const OVERRULED_LINT:    &'static str = "conflicting lint levels.";
+const UNREACHABLE_RULE: &'static str = "unreachable rule.";
+const CYCLE: &'static str = "cycle among unit rules.";
+const CYCLE_NULLABLE: &'static str = "cycle that includes a nullable rule";
+const OVERRULED_LINT: &'static str = "conflicting lint levels.";
 // const INVALID_LINT:      &'static str = "unknown lint.";
 // const UNUSED_ATTR:       &'static str = "unused attribute.";
-
 
 impl<'a> WarningsWithContext<'a> {
     pub fn report_warnings(&self) {

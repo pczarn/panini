@@ -1,15 +1,32 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::mem;
 
 use cfg::Symbol;
 
 use input::FragmentId;
-use middle::trace::Trace;
 use middle::flatten_stmts::{Path, Position};
+use middle::trace::Trace;
 
 pub struct TypeCollector {
     queue: BinaryHeap<PathWithType>,
     pub types: BTreeMap<Path, BTreeSet<Type>>,
+    pub conflicts: BTreeMap<Path, TypeConflicts>,
+    pub final_types: BTreeMap<Path, Type>,
+}
+
+struct TypeMerger {
+    tuple: BTreeMap<usize, Type>,
+    tuple_keys: BTreeSet<usize>,
+    sequence: Option<Type>,
+    struct_: BTreeMap<Path, Type>,
+    conflicts: TypeConflicts,
+}
+
+pub struct TypeConflicts {
+    tuple: BTreeSet<usize>,
+    struct_: bool,
+    sequence: BTreeSet<Type>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,27 +37,35 @@ pub struct PathWithType {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Type {
-    Tuple {
-        fields: BTreeMap<usize, Type>,
-    },
-    Struct {
-        fields: BTreeMap<Path, Type>,
-    },
-    Sequence {
-        ty: Box<Type>,
-    },
-    TypeOfFragment {
-        fragment: FragmentId,
-    },
+    Tuple { fields: BTreeMap<usize, Type> },
+    Sequence { ty: Box<Type> },
+    Struct { fields: BTreeMap<Path, Type> },
+    TypeOfFragment { fragment: FragmentId },
     // TypeOfSymbol {
     //     symbol: Symbol,
     // },
     Bottom,
 }
 
+// #[ast]
+// mod type {
+//     #[ast_branch]
+//     enum Branch {
+//         TupleField(usize),
+//         Sequence,
+//         StructField(Path),
+//         Fragment(FragmentId),
+//         Bottom,
+//     }
+// }
+
 impl Ord for PathWithType {
     fn cmp(&self, other: &Self) -> Ordering {
-        (self.path.position.len(), &self.path, &self.ty).cmp(&(other.path.position.len(), &other.path, &other.ty))
+        (self.path.position.len(), &self.path, &self.ty).cmp(&(
+            other.path.position.len(),
+            &other.path,
+            &other.ty,
+        ))
     }
 }
 
@@ -50,131 +75,201 @@ impl PartialOrd for PathWithType {
     }
 }
 
+impl TypeMerger {
+    fn new() -> TypeMerger {
+        TypeMerger {
+            tuple: BTreeMap::new(),
+            tuple_keys: BTreeSet::new(),
+            sequence: None,
+            struct_: BTreeMap::new(),
+            conflicts: TypeConflicts::new(),
+        }
+    }
+
+    fn merge(&mut self, ty: Type) {
+        match ty {
+            Type::Sequence { ty } => {
+                if let Some(target) = self.sequence.as_mut() {
+                    if &*target != &*ty {
+                        self.conflicts.sequence.insert(target.clone());
+                        self.conflicts.sequence.insert(*ty);
+                    }
+                } else {
+                    self.sequence = Some(*ty);
+                }
+            }
+            Type::Tuple { fields } => {
+                let keys: BTreeSet<usize> = fields.keys().cloned().collect();
+                self.conflicts
+                    .tuple
+                    .extend(self.tuple_keys.intersection(&keys));
+                self.tuple.extend(fields.into_iter());
+                self.tuple_keys.extend(keys.into_iter());
+            }
+            // a:foo | b:foo
+            Type::Struct { fields } => {
+                if !self.struct_.is_empty() && fields != self.struct_ {
+                    self.conflicts.struct_ = true;
+                } else {
+                    self.struct_.extend(fields.into_iter());
+                }
+            }
+            Type::Bottom | Type::TypeOfFragment { .. } => unreachable!(),
+        }
+    }
+
+    fn finish_merge(&mut self) {
+        if let &Some(ref ty) = &self.sequence {
+            if !self.tuple.is_empty() && !self.struct_.is_empty() {
+                self.conflicts.sequence.insert(ty.clone());
+            }
+        }
+    }
+
+    fn merged_type(self) -> Type {
+        if let Some(ty) = self.sequence {
+            Type::Sequence { ty: Box::new(ty) }
+        } else {
+            if !self.struct_.is_empty() {
+                Type::Struct {
+                    fields: self.struct_,
+                }
+            } else {
+                Type::Tuple { fields: self.tuple }
+            }
+        }
+    }
+}
+
+impl TypeConflicts {
+    fn new() -> TypeConflicts {
+        TypeConflicts {
+            tuple: BTreeSet::new(),
+            struct_: false,
+            sequence: BTreeSet::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tuple.is_empty() && !self.struct_ && self.sequence.is_empty()
+    }
+}
+
 impl TypeCollector {
     pub fn new() -> Self {
         TypeCollector {
             queue: BinaryHeap::new(),
             types: BTreeMap::new(),
+            conflicts: BTreeMap::new(),
+            final_types: BTreeMap::new(),
         }
     }
 
-    pub fn collect(&mut self, paths: Vec<Path>) {
-        self.queue.clear();
-        self.queue.extend(paths.into_iter().map(|path| PathWithType { path, ty: Type::Bottom }));
+    pub fn collect(&mut self, input_tree: InputTree) {
+        self.decompose_types(input_tree);
+        self.merge_types();
+    }
 
-        while let Some(path_with_type) = self.queue.pop() {
-            let full_path = path_with_type.path.clone();
-            let (&last_position, prefix_path_a) = path_with_type.path.split_last();
-            let prefix_path = prefix_path_a.clone();
-            let ty = match (last_position, path_with_type.ty) {
-                (Position::IdxWithFragment { idx, fragment }, Type::Bottom) => {
-                    let ty = if let Some(&Position::Bind(..)) = prefix_path.position.last() {
-                        Type::TypeOfFragment { fragment }
-                    } else {
-                        let fields = btreemap! { idx => Type::TypeOfFragment { fragment } };
-                        Type::Tuple { fields }
-                    };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    Type::merge(entry, ty)
-                }
-                (Position::IdxWithFragment { .. }, ty) => {
-                    // let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    // Type::merge(entry, ty)
-                    // let mut range_end = full_path.clone();
-                    // range_end.position.push(Position::Max);
-                    // for (path, set) in self.types.range_mut(full_path .. range_end) {
-                    //     for position in path.position.iter().skip(1) {
-                    //         match position {
-                    //             Position::Sequence { .. } => {
-                    //                 set.insert();
-                    //             }
-                    //         }
-                    //     }
-                    // }
-                    ty
-                }
-                (Position::StmtIdx(..), ty) => {
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    let ty = Type::merge(entry, ty);
-                    ty
-                }
-                (Position::StmtFragment(..), ty) => {
-                    ty
-                }
-                (Position::Alternative(_), ty) => {
-                    // let ty = Type::Tuple { fields };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    let ty = Type::merge(entry, ty);
-                    // self.rules.entry()
-                    ty
-                }
-                (Position::Sequence { min, max }, Type::Struct { fields }) => {
-                    let ty = if let Some(&Position::Bind(..)) = prefix_path.position.last() {
-                        Type::Sequence {
-                            ty: Box::new(Type::Struct { fields })
+    fn decompose_types(&mut self, input_tree: InputTree) {
+        // let not_start_position = |(backward_way, _forward_ways)| !backward_way.is_empty();
+        // let map = |(backward_way, forward_ways)| {
+        //     let forward_types = forward_ways.map(|way| {
+        //         way.filter_map(|step| {
+        //             match step {
+        //                 Step::Fragment(fragment) => Some(Type::Fragment(fragment)),
+        //                 Step::Idx(idx) => Some(Type::TupleField(idx)),
+        //                 Step::Sequence { min, max } => {
+        //                     if let Some(&Step::Bind(..)) = backward_way.last() {
+        //                         Type::Sequence {
+        //                             ty: Box::new(Type::Struct { fields })
+        //                         }
+        //                     } else {
+        //                         Type::struct_with_position(fields, Position::Sequence { min, max })
+        //                     }
+        //                 }
+
+        //                 Step::StmtIdx(..)
+        //                     | Step::Alternative(_) =>
+        //                         None
+
+        //                 Step::SequenceEnd
+        //                     | Step::SequenceToken
+        //                     | Step::Max
+        //                     | Step::StmtFragment(..) =>
+        //                         unreachable!()
+        //             }
+        //         })
+        //     }).collect();
+        //     (backward_way.collect(), forward_types)
+        // };
+
+        // let types = input_tree.positions()
+        //                       .filter(not_start_position)
+        //                       .map(map).collect();
+        // self.types = types;
+
+        for path in &input_tree.paths {
+            path.prefixes()
+                .rev()
+                .filter(|prefix| prefix.position.len() >= 2)
+                .fold(Type::Bottom, |acc, elem| {
+                    let (last_position, prefix) = elem.split_last();
+                    let ty = match (last_position, acc) {
+                        (Position::Fragment(fragment), Type::Bottom) => {
+                            Type::TypeOfFragment { fragment }
                         }
-                    } else {
-                        Type::struct_with_position(fields, Position::Sequence { min, max })
-                    };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    Type::merge(entry, ty)
-                }
-                (Position::Sequence { .. }, type_b) => {
-                    let ty = Type::Sequence { ty: Box::new(type_b) };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    Type::merge(entry, ty)
-                }
-                (Position::Bind(bind_id), type_b) => {
-                    let ty = Type::Struct {
-                        fields: btreemap! {
-                            Path {
-                                position: vec![Position::Bind(bind_id)]
-                            } => type_b
+                        (Position::Fragment(..), _) => unreachable!(),
+                        (Position::Idx(idx), ty) => Type::Tuple {
+                            fields: btreemap! {
+                                idx => ty
+                            },
+                        },
+                        (Position::StmtIdx(..), ty) => ty,
+                        (Position::Alternative(_), ty) => ty,
+                        (Position::Sequence { min, max }, Type::Struct { fields }) => {
+                            if let Some(&Position::Bind(..)) = prefix.position.last() {
+                                Type::Sequence {
+                                    ty: Box::new(Type::Struct { fields }),
+                                }
+                            } else {
+                                Type::struct_with_position(fields, Position::Sequence { min, max })
+                            }
                         }
+                        (Position::Sequence { .. }, ty) => Type::Sequence { ty: Box::new(ty) },
+                        (bind @ Position::Bind { .. }, ty) => Type::Struct {
+                            fields: btreemap! {
+                                path![bind] => ty
+                            },
+                        },
+                        (Position::SequenceEnd, _)
+                        | (Position::SequenceToken, _)
+                        | (Position::Max, _)
+                        | (Position::StmtFragment(..), _) => unreachable!(),
                     };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    Type::merge(entry, ty)
-                }
-                (Position::Idx(idx), type_b) => {
-                    let ty = Type::Tuple {
-                        fields: btreemap! {
-                            idx => type_b
-                        }
-                    };
-                    let entry = self.types.entry(prefix_path).or_insert(BTreeSet::new());
-                    Type::merge(entry, ty)
-                }
-                (Position::SequenceEnd, _)
-                    | (Position::SequenceToken, _)
-                    | (Position::Max, _) => unreachable!()
-            };
-            // let new_rule = RuleValue {
-            //     rhs: btreemap! {},
-            //     sequence: None,
-            //     traces: btreemap! {},
-            // };
-            if prefix_path_a.position.len() > 0 {
-                if self.queue.iter().all(|elem| {
-                    let (_, prefix) = elem.path.position.split_last().unwrap();
-                    let prefix_path_b = Path { position: prefix.to_vec() };
-                    prefix_path_b != prefix_path_a
-                }) {
-                    self.queue.push(PathWithType {
-                        path: prefix_path_a.clone(),
-                        ty: ty,
-                    });
-                }
-            }
+                    self.types
+                        .entry(prefix)
+                        .or_insert(BTreeSet::new())
+                        .insert(ty.clone());
+                    ty
+                });
         }
     }
 
-    pub fn simplify_tuples(&mut self) {
-        for (_, ty_set) in &mut self.types {
-            let mut tys: Vec<_> = ty_set.iter().cloned().collect();
-            for ty in &mut tys {
+    fn merge_types(&mut self) {
+        for (path, ty_set) in self.types.iter_mut() {
+            let mut merger = TypeMerger::new();
+            for mut ty in ty_set.iter().cloned() {
                 ty.simplify_tuples();
+                merger.merge(ty);
             }
-            *ty_set = tys.into_iter().collect();
+            merger.finish_merge();
+            if !merger.conflicts.is_empty() {
+                self.conflicts.insert(
+                    path.clone(),
+                    mem::replace(&mut merger.conflicts, TypeConflicts::new()),
+                );
+            }
+            self.final_types.insert(path.clone(), merger.merged_type());
         }
     }
 
@@ -191,11 +286,17 @@ impl TypeCollector {
                             paths.push(path.clone());
                         }
                     }
-                    let mut longest_path = paths.into_iter().max_by_key(|path| path.position.len()).unwrap();
+                    let mut longest_path = paths
+                        .into_iter()
+                        .max_by_key(|path| path.position.len())
+                        .unwrap();
                     let mut longest_path_range = longest_path.clone().range();
-                    longest_path_range.start.position.push(Position::Alternative(!0));
+                    longest_path_range
+                        .start
+                        .position
+                        .push(Position::Alternative(!0));
                     longest_path.position.push(Position::Alternative(!0));
-                    let start = trace.tokens.range(.. longest_path).count();
+                    let start = trace.tokens.range(..longest_path).count();
                     let end = start + trace.tokens.range(longest_path_range.clone()).count();
                     spans.push((start, end));
                 }
@@ -258,12 +359,13 @@ impl Type {
                 ty.simplify_tuples();
                 None
             }
-            _ => None
+            _ => None,
         };
         if let Some(ty) = replace {
             *self = ty;
         }
     }
+
     fn struct_with_position(fields: BTreeMap<Path, Type>, position: Position) -> Type {
         let mut fields: Vec<_> = fields.into_iter().collect();
         for &mut (ref mut path, ref mut ty) in &mut fields {
@@ -272,85 +374,12 @@ impl Type {
                     let ty_inner = Box::new(ty.clone());
                     *ty = Type::Sequence { ty: ty_inner };
                 }
-                _ => unreachable!()
+                _ => unreachable!(),
             }
             path.position.insert(0, position);
         }
-        Type::Struct { fields: fields.into_iter().collect() }
-    }
-
-    fn merge(types: &mut BTreeSet<Type>, ty: Type) -> Type {
-        let mut queue: Vec<_> = types.iter().cloned().collect();
-        queue.push(ty);
-        let mut result = BTreeSet::new();
-        loop {
-            let mut take_2 = [queue.pop(), queue.pop()];
-            take_2.sort();
-            match take_2 {
-                [Some(type_a), Some(type_b)] => match [type_a, type_b] {
-                    [Type::Tuple { fields: mut fields_a }, Type::Tuple { fields: fields_b }] => {
-                        let field_indices_a: BTreeSet<_> = fields_a.keys().collect();
-                        let field_indices_b: BTreeSet<_> = fields_b.keys().collect();
-                        if field_indices_a.is_disjoint(&field_indices_b) {
-                            fields_a.extend(fields_b.into_iter());
-                            let ty = Type::Tuple { fields: fields_a };
-                            result.insert(ty.clone());
-                            queue.push(ty);
-                        } else {
-                            result.insert(Type::Tuple { fields: fields_a.clone() });
-                            result.insert(Type::Tuple { fields: fields_b });
-                            queue.push(Type::Tuple { fields: fields_a });
-                        }
-                    }
-                    [Type::Tuple { .. }, type_b @ Type::Struct { .. }]
-                    | [type_b @ Type::Struct { .. }, Type::Tuple { .. }] => {
-                        result.insert(type_b.clone());
-                        queue.push(type_b);
-                    }
-                    [type_a @ Type::Tuple { .. }, type_b] | [type_b, type_a @ Type::Tuple { .. }] => {
-                        result.insert(type_a);
-                        result.insert(type_b.clone());
-                        queue.push(type_b);
-                    }
-                    [Type::Struct { fields: mut fields_a }, Type::Struct { fields: fields_b }] => {
-                        for (key, value) in fields_b {
-                            fields_a.insert(key, value);
-                        }
-                        let ty = Type::Struct { fields: fields_a };
-                        result.insert(ty.clone());
-                        queue.push(ty);
-                    }
-                    [Type::Struct { fields }, Type::Sequence { ty }] => {
-                        result.insert(Type::Struct { fields: fields.clone() });
-                        result.insert(Type::Sequence { ty });
-                        queue.push(Type::Struct { fields });
-                    }
-                    // [Type::Tuple { fields }, Type::Sequence { ty }] => {
-                    //     match ty {
-                    //         &mut Type::Tuple { ref mut fields } => {
-                    //             fields.insert(idx, Type::TypeOfFragment { fragment })
-                    //         }
-                    //         _ => unreachable!()
-                    //     }
-                    // }
-                    // [Type::Struct {}]
-                    [Type::Sequence { ty }, type_b] => {
-                        result.insert(Type::Sequence { ty });
-                        result.insert(type_b.clone());
-                        queue.push(type_b);
-                    }
-                    [Type::TypeOfFragment { .. }, _]
-                    | [_, Type::TypeOfFragment { .. }]
-                    | [Type::Bottom, _]
-                    | [_, Type::Bottom] => unreachable!(),
-                },
-                [Some(ty), None] | [None, Some(ty)] => {
-                    result.insert(ty.clone());
-                    *types = result;
-                    return ty;
-                }
-                [None, None] => panic!("{:#?}", queue)
-            }
+        Type::Struct {
+            fields: fields.into_iter().collect(),
         }
     }
 }

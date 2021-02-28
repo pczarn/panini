@@ -1,5 +1,13 @@
 ## Panini • [![Latest version](https://img.shields.io/crates/v/panini.png)](https://crates.io/crates/panini)
 
+Perhaps you have heard that parser generators are kludgy, and you should roll out custom parser code. Panini is here to change your beliefs about practical parsing.
+
+Perhaps you have heard that you have to choose regex, LL, LALR, LR, PEG, combinators, or general parsing. Panini has all of these common algorithms, and more. It chooses the best option for you by switching between algorithms during your parse.
+
+Perhaps you have heard that a general parser can't be fast. Panini has top speed thanks to state-of-art optimizations.
+
+Perhaps you have heard that all a general parser can provide is a single step beyond the power of regular expressions. Panini goes several steps further.
+
 Work in progress.
 A general-purpose parser generator as a Rust syntax extension.
 

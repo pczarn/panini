@@ -34,6 +34,6 @@ impl Error for TransformationError {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct CycleWithCauses {
-    pub lhs: Symbol, // Spanned
-    pub causes: Vec<Symbol> // Spanned
+    pub lhs: Symbol,         // Spanned
+    pub causes: Vec<Symbol>, // Spanned
 }

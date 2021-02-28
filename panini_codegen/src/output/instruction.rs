@@ -35,12 +35,15 @@ enum_coder! {
             id: usize,
         },
 
-        MakeTerminalAccessorStruct,
+        MakeTerminalAccessorStruct {
+            fn_count: usize,
+            map:
+        }
 
         // defines:
         //
         // impl EnumStreamParser<C, D> {
-        //     fn common_parse<Iter>(&'g mut self, into_iter: Iter, traced: bool) 
+        //     fn common_parse<Iter>(&'g mut self, into_iter: Iter, traced: bool)
         // }
         // MakeEnumStreamParserCommonParseImpl {
         //     UpperParse: rs::Ident,
@@ -90,7 +93,7 @@ enum_coder! {
     // }
 
     #[generate_list]
-    fn translate(ir: Ir, tables: Tables, instructions: Vec<Instruction>) -> Vec<LowerInstruction> {
+    fn translate(ir: &Ir, tables: &Tables, instructions: Vec<Instruction>) -> Vec<LowerInstruction> {
         for instruction in instructions {
             match instruction {
                 Instruction::MakeTerminalAccessorFn { terminal } => {
@@ -101,8 +104,8 @@ enum_coder! {
                         id,
                     }
                 }
-                Instruction::MakeTerminalAccessorStruct { number } => {
-                    Concat(number);
+                Instruction::MakeTerminalAccessorStruct { fn_count } => {
+                    Concat(fn_count);
                     MakeTerminalAccessorStruct();
                 }
             }

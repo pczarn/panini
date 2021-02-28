@@ -4,15 +4,6 @@
 extern crate log;
 extern crate env_logger;
 
-extern crate rustc;
-extern crate syntax;
-extern crate syntax_pos;
-
-extern crate serde_cbor;
-
-extern crate quote;
-extern crate proc_macro2;
-
 extern crate bit_matrix;
 extern crate cfg;
 extern crate cfg_regex;
@@ -23,32 +14,26 @@ extern crate enum_coder;
 #[macro_use]
 extern crate maplit;
 
+#[macro_use]
 pub mod middle;
 pub mod input;
 pub mod output;
 
 use middle::ir::Ir;
 use middle::error::TransformationError;
-use input::ast::Stmts;
+use input::InputTree;
 use output::instruction::InstructionList;
 use output::translator::IrTranslator;
 
-pub fn process(stmts: Stmts) -> Result<InstructionList, TransformationError> {
-    match phase_1_lower_to_ir(stmts) {
-        Ok(ir) => {
-            Ok(phase_2_translate(ir))
-        }
-        Err(error) => {
-            Err(error)
-        }
-    }
+pub fn process(input: InputTree) -> Result<InstructionList, TransformationError> {
+    phase_1_lower_to_ir(input).map(phase_2_translate)
 }
 
-fn phase_1_lower_to_ir(stmts: Stmts) -> Result<Ir, TransformationError> {
-    middle::ir::IrMapped::transform_from_stmts(stmts).map(|ir_mapped| ir_mapped.into())
+pub fn phase_1_lower_to_ir(input: InputTree) -> Result<Ir, TransformationError> {
+    Ir::transform(input)
 }    
 
-fn phase_2_translate(ir: Ir) -> InstructionList {
+pub fn phase_2_translate(ir: Ir) -> InstructionList {
     IrTranslator::new(ir).generate()
 }
 

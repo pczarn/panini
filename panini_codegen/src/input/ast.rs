@@ -1,52 +1,34 @@
 use input::{AttrId, TyId, LexerId, BindId, FragmentId, ExprId, SpanId};
 use input::attr_arguments::AttrArguments;
 
-#[derive(Clone, Debug)]
-pub struct Stmts {
+pub struct InputTree {
+    pub pathways: Vec<Pathway>,
+
     pub attr_arguments: AttrArguments,
-    pub stmts: Vec<Stmt>,
     pub lexer: Option<LexerId>,
 }
 
-#[derive(Clone, Debug)]
-pub struct Stmt {
-    pub lhs: rs::Term,
-    pub body: Vec<Alternative>,
-    pub ty: Option<rs::TokenStream>,
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct Pathway {
+    pub steps: Vec<Step>,
 }
 
-pub type Alternative = (Level, Rhs, Action);
-
-type Level = u32;
-
-#[derive(Clone, Debug)]
-pub struct Rhs(pub Vec<RhsElement>);
-
-#[derive(Clone, Debug)]
-pub struct Action {
-    pub expr: Option<ExprId>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RhsElement {
-    pub bind: Bind,
-    pub elem: RhsAst,
-}
-
-pub type Bind = Option<BindId>;
-
-#[derive(Clone, Debug)]
-pub enum RhsAst {
-    Symbol(rs::Term),
-    String(String),
-    Sequence(Sequence),
-    Sum(Vec<Rhs>),
-    Product(Rhs),
-}
-
-#[derive(Clone, Debug)]
-pub struct Sequence {
-    pub rhs: Rhs,
-    pub min: u32,
-    pub max: Option<u32>,
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub enum Step {
+    Alternative(usize),
+    Idx(usize),
+    Fragment(rs::Term),
+    StmtFragment(rs::Term),
+    StmtTy(rs::TokenStream),
+    StmtIdx(usize),
+    // Class(Class, Symbol),
+    // RightQuote,
+    Bind { bind_id: BindId, idx: usize },
+    Sequence {
+        min: u32,
+        max: Option<u32>,
+    },
+    SequenceEnd,
+    SequenceToken,
+    Max,
 }

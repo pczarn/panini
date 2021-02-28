@@ -59,12 +59,10 @@ impl<T> Rule<T> {
     }
 
     pub fn action(self, func: impl Fn(Vec<T>) -> T + 'static) -> Rule<T> {
-        Rule::Sum(vec![
-            Summand {
-                rule: self,
-                action: Rc::new(func),
-            }
-        ])
+        Rule::Sum(vec![Summand {
+            rule: self,
+            action: Rc::new(func),
+        }])
     }
 
     fn or(self, next: Rule<T>) -> Rule<T> {

@@ -4,28 +4,28 @@
 
 #![allow(non_snake_case)]
 
-use std::iter;
-use std::collections::HashSet;
-use std::collections::HashMap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::Write;
-use std::u32;
+use std::iter;
 use std::mem;
+use std::u32;
 
-use quote::ToTokens;
+// use quote::ToTokens;
 
 use cfg::symbol::Symbol;
 use cfg::ContextFreeRef;
 // use cfg::remap::Mapping;
-use cfg::rule::GrammarRule;
 use cfg::rule::container::RuleContainer;
+use cfg::rule::GrammarRule;
 use cfg::symbol::SymbolBitSet;
 // use gearley::grammar::InternalGrammar;
 
 // use middle::{Ir, Ty, AutoTy};
 // use middle::action::{Action, ActionExpr};
 use middle::ir::Ir;
-use output::instruction::{Instruction, InstructionList, translate_ir};
+use output::instruction::{translate_ir, Instruction, InstructionList};
 
 const CHAR_CLASSIFIER_MACRO_NAME: &'static str = "char_classifier";
 
@@ -68,7 +68,7 @@ type RustTyId = u32;
 //         fields: Vec<Symbol>,
 //     },
 //     Infer {
-//         nonterminal: Symbol,   
+//         nonterminal: Symbol,
 //     },
 //     Terminal,
 // }
