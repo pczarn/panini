@@ -1,11 +1,12 @@
 [package]
-name = "panini_runtime"
+name = "panini_web"
 version = "0.0.0"
 authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
 edition = "2018"
 
 [dependencies]
 panini_logic = "0.0.0"
+rocket = "0.4.10"
 
 [patch.crates-io]
 panini_logic = { path = "/home/piotr/src/panini/panini_logic" }

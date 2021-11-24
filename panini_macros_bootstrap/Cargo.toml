@@ -1,0 +1,15 @@
+[package]
+name = "panini_runtime"
+version = "0.0.0"
+authors = ["Piotr Czarnecki <pioczarn@gmail.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+panini_logic = "0.0.0"
+proc-macro2 = "1.0"
+
+[patch.crates-io]
+panini_logic = { path = "/home/piotr/src/panini/panini_logic" }

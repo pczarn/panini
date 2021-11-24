@@ -23,6 +23,8 @@ use panini_codegen::rs;
 
 pub type Name = rs::Spanned<rs::Name>;
 
+
+
 #[plugin_registrar]
 pub fn plugin_registrar(reg: &mut ::rustc_plugin::Registry) {
     reg.register_macro("grammar", expand_grammar);

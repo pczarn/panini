@@ -1,4 +1,4 @@
-macro_rules! enum_stream {
+macro_rules! runtime_enum_stream {
     (
         [-> $Terminal:ty, $RetTy:ident]
         {
