@@ -17,6 +17,48 @@ use panini_logic::middle::type_collector::{TypeCollector, Type};
 
 #[test]
 fn test_bound_deep_sequence() {
+    let grammars = vec![
+        grammar! {
+            start ::= s:[a:a b:b]*
+
+            #[stage1] {
+                struct Type0 {
+                    a: Terminal,
+                    b: Terminal,
+                }
+            }
+    
+            #[stage2] {
+                start -> Type1 ::= s:[sym0]* => { Type1 { s } };
+                sym0 -> Type0 ::= a:a b:b => { Type0 { a, b } };
+                struct Type0 {
+                    a: Terminal,
+                    b: Terminal,
+                }
+                struct Type1 {
+                    s: Vec<Type0>,
+                }
+            }
+
+            #[stage3] {
+                #![terminals(a, b)]
+                start -> Type1 ::= bind0:sym1 => { bind0 };
+                sym1 -> Type1 ::= s:sym2 => { Type1 { s } };
+                sym2 -> Vec<Type0> ::= bind0:sym2 bind1:sym0 => { bind0.push(bind1); bind0 }
+                    | [] => { Vec::new() };
+                sym0 -> Type0 ::= a:a b:b => { Type0 { a, b } };
+                struct Type0 {
+                    a: Terminal,
+                    b: Terminal,
+                }
+                struct Type1 {
+                    s: Vec<Type0>,
+                }
+            }
+        },
+    ];
+
+
     let (start, a, b) = (0, 1, 2);
     let (bind_s, bind_a, bind_b) = (0, 1, 2);
     let stmts = Stmts {
