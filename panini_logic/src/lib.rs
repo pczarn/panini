@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
-#![feature(plugin_registrar, rustc_private)]
+#![feature(rustc_private)]
+// plugin_registrar, 
 
 extern crate log;
 extern crate env_logger;
@@ -21,15 +22,15 @@ pub mod output;
 
 use middle::ir::Ir;
 use middle::error::TransformationError;
-use input::InputTree;
+use input::PathwayGraph;
 use output::instruction::InstructionList;
 use output::translator::IrTranslator;
 
-pub fn process(input: InputTree) -> Result<InstructionList, TransformationError> {
+pub fn process(input: PathwayGraph) -> Result<InstructionList, TransformationError> {
     phase_1_lower_to_ir(input).map(phase_2_translate)
 }
 
-pub fn phase_1_lower_to_ir(input: InputTree) -> Result<Ir, TransformationError> {
+pub fn phase_1_lower_to_ir(input: PathwayGraph) -> Result<Ir, TransformationError> {
     Ir::transform(input)
 }    
 

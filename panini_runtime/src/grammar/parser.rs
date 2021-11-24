@@ -15,6 +15,7 @@ pub struct Tables<N> {
     fragments: BTreeMap<String, FragmentId>,
     fragment_vec: Vec<String>,
     action_vec: Vec<Rc<dyn Fn(Vec<N>) -> N>>,
+    stmt_map: BTreeMap<(FragmentId, usize), ExprId>,
 }
 
 pub struct Parser<N, T> {
@@ -31,6 +32,7 @@ impl<N> Tables<N> {
             fragments: BTreeMap::new(),
             fragment_vec: vec![],
             action_vec: vec![],
+            stmt_map: BTreeMap::new(),
         }
     }
 

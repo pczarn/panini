@@ -55,6 +55,41 @@ macro_rules! grammar {
     )
 }
 
+macro_rules! grammar_make_lower {
+    (
+        $(
+            $lhs:ident
+            ->
+            ($rule_ty:ty)
+            ::=
+            $(
+                $rule:tt
+                =>
+                {$($action_tts:tt)*}
+            )|+
+            ;
+        )*
+    ) => (
+        {
+            fn new_grammar() -> crate::Grammar<(), ()> {
+                use ::std::collections::BTreeMap;
+                crate::Grammar {
+                    rules: BTreeMap::new(),
+                    sub: crate::EnumStreamGrammar::new(),
+                }
+            }
+            let mut grammar =  new_grammar();
+            $(
+                grammar.rule(
+                    stringify!($lhs),
+                    rule!($($rule [__RetTy::$lhs]=> {{$($action_tts)*}})|+),
+                );
+            )*
+            crate::Grammar::make_lower(grammar.rules)
+        }
+    )
+}
+
 macro_rules! rule {
     ($rhs:ident) => {
         crate::Rule::call(stringify!($rhs))

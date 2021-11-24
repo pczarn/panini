@@ -13,11 +13,11 @@ use cfg::*;
 use cfg_regex::{Class, RegexTranslation};
 use gearley::grammar::{BinarizedGrammar, Grammar, History};
 
-use input::attr_arguments::AttrArguments;
 use input::{self, FragmentId, LexerId, LEXER_START_FRAGMENT};
+use input::ast::{PathwayGraph, Step, IdxKind, NULL_NODE};
 use middle::embedded_string::EmbeddedString;
 use middle::error::{CycleWithCauses, TransformationError};
-use middle::flatten_stmts::{FlattenStmts, Path, Position};
+use middle::simplify_pathways::SimplifyPathways;
 use middle::rule_rewrite::{InputRuleRewriteResult, Rule, RuleRewrite, RuleRewriteResult};
 use middle::symbol_maps::{InputSymbol, SymbolMaps};
 use middle::trace::Trace;
@@ -30,7 +30,7 @@ pub struct Ir {
     pub trivial_derivation: bool,
     // for actions, accessed by action ID.
     pub rules: RuleRewriteResult,
-    pub type_map: BTreeMap<Path, BTreeSet<Type>>,
+    pub type_map: Vec<BTreeSet<Type>>,
     pub maps: SymbolMaps,
     // pub assert_type_equality: Vec<(Symbol, Type)>,
     pub attr_arguments: AttrArguments,
@@ -52,15 +52,15 @@ pub enum LexerLayer {
     None,
 }
 
-struct IrStmts {
-    input_tree: input::InputTree,
+struct IrInput {
+    input: input::Input,
     start: FragmentId,
 }
 
 struct IrWithRules {
     rules: InputRuleRewriteResult,
     start: FragmentId,
-    attr_arguments: AttrArguments,
+    parameters: input::Parameters,
     errors: Vec<TransformationError>,
     embedded_strings: Vec<String>, // TODO
     // Final
@@ -126,44 +126,51 @@ pub struct IrMapped {
 
 struct CommonPrepared {
     rules: RuleRewriteResult,
-    attr_arguments: AttrArguments,
+    parameters: input::Parameters,
     errors: Vec<TransformationError>,
     trace: Trace,
     lexer_layer: LexerLayer,
     sym_map: SymbolMaps,
-    type_map: BTreeMap<Path, BTreeSet<Type>>,
+    type_map: Vec<BTreeSet<Type>>,
 }
 
 impl IrInput {
-    fn compute(mut input: input::InputTree) -> Result<Self, TransformationError> {
+    fn compute(mut input: input::Input) -> Result<Self, TransformationError> {
         // Obtain the explicit start.
-        let start = if let Some(first_pathway) = input.pathways.get(0) {
-            first_pathway
-                .steps
-                .iter()
-                .filter_map(|&step| match step {
-                    Step::StmtFragment(fragment_id) => Some(fragment_id),
-                    _ => None,
-                })
-                .next()
-                .expect("stmt fragment not present")
-        } else {
-            return Err(TransformationError::GrammarIsEmpty);
-        };
+        let start = IrInput::first_stmt_fragment(&input.pathway_graph)?;
 
-        if let Some(ref lexer_arguments) = input.attr_arguments.lexer_arguments {
+        if let &Some(input::LexerParameters { ref terminals, .. }) = &input.parameters.lexer_parameters {
             // Set the implicit start.
-            for &terminal in &lexer_arguments.terminals {
-                let start_branch = pathway![
-                    Step::StmtIdx(0),
-                    Step::StmtFragment(LEXER_START_FRAGMENT),
-                    Step::Fragment(terminal),
-                ];
-                input.pathways.push(start_branch);
+            for &terminal_id in terminals {
+                IrInput::implicit_start(&mut input.pathway_graph, terminal_id);
             }
         }
 
         Ok(IrInput { input, start })
+    }
+
+    fn first_stmt_fragment(pathway_graph: &PathwayGraph) -> Result<FragmentId, TransformationError> {
+        pathway_graph
+            .iter()
+            .filter_map(|&step| match step {
+                Step::StmtFragment(fragment_id) => Some(fragment_id),
+                _ => None,
+            })
+            .next()
+            .ok_or(TransformationError::GrammarIsEmpty)
+    }
+
+    fn implicit_start(pathway_graph: &mut PathwayGraph, terminal_id: FragmentId) {
+        pathway_graph.node(
+            Step::Idx(IdxKind::Stmt, 0),
+            vec![pathway_graph.node(
+                Step::StmtFragment(LEXER_START_FRAGMENT),
+                vec![pathway_graph.node(
+                    Step::Fragment(terminal_id),
+                    vec![],
+                )]
+            )]
+        );
     }
 }
 
@@ -172,11 +179,11 @@ impl IrWithRules {
         let mut trace = Trace::from_input(&ir.input);
         let (rules, type_collector) = {
             let mut rule_rewrite = RuleRewrite::new(&mut trace);
-            let mut flatten = FlattenStmts::new();
-            flatten.flatten_stmts(&ir.stmts);
-            rule_rewrite.rewrite(flatten.paths.clone());
+            let mut simplify = SimplifyPathways::new();
+            simplify.simplify_pathways(&ir.input);
+            rule_rewrite.rewrite(simplify.pathway_graph.clone());
             let mut type_collector = TypeCollector::new();
-            type_collector.collect(flatten.paths());
+            type_collector.collect(simplify.pathway_graph);
             (rule_rewrite.result(), type_collector)
         };
 
@@ -189,7 +196,7 @@ impl IrWithRules {
             );
         }
 
-        let lexer_layer = if let Some(lexer_id) = ir.stmts.lexer {
+        let lexer_layer = if let Some(lexer_id) = ir.input.lexer {
             LexerLayer::Invoke {
                 lexer_id,
                 embedded_strings: vec![],
@@ -203,7 +210,7 @@ impl IrWithRules {
             start: ir.start,
             trace,
             lexer_layer,
-            attr_arguments: ir.stmts.attr_arguments,
+            parameters: ir.input.parameters,
             embedded_strings: vec![],
             errors,
             type_collector,
@@ -251,7 +258,7 @@ impl IrPrepared {
                     }
                 }
                 LexerLayer::None => {
-                    if ir.attr_arguments.lexer_arguments.is_some() {
+                    if ir.parameters.lexer_parameters.is_some() {
                         // // We are at level 1 .. N and adding strings to the current level.
                         // // Embedded strings are rewritten into rules. Character ranges are
                         // // collected.
@@ -306,7 +313,7 @@ impl IrPrepared {
             // Final
             common: CommonPrepared {
                 rules: grammar_rules,
-                attr_arguments: ir.attr_arguments,
+                parameters: ir.parameters,
                 errors: ir.errors,
                 trace: ir.trace,
                 lexer_layer,
@@ -577,9 +584,9 @@ impl IrMapped {
         })
     }
 
-    pub fn transform_from_stmts(stmts: ast::Stmts) -> Result<Self, TransformationError> {
+    pub fn transform_from_input(input: input::Input) -> Result<Self, TransformationError> {
         // let attrs = Attrs::compute(&stmts.attrs[..])?;
-        let ir = IrStmts::compute(stmts)?;
+        let ir = IrInput::compute(input)?;
         let ir = IrWithRules::compute(ir)?;
         let ir = IrPrepared::compute(ir);
         let ir = IrBinarized::compute(ir)?;

@@ -6,8 +6,9 @@ pub mod error;
 // pub mod hir;
 pub mod ir;
 // pub mod rule;
-#[macro_use]
-pub mod flatten_stmts;
+// #[macro_use]
+// pub mod flatten_stmts;
+pub mod simplify_pathways;
 pub mod rule_rewrite;
 pub mod trace;
 pub mod type_collector;

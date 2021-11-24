@@ -19,89 +19,28 @@ use panini_logic::middle::type_collector::{TypeCollector, Type};
 fn test_multilevel_sequence() {
     let (start, a, b) = (0, 1, 2);
     let (bind_a, bind_b) = (0, 1);
-    let stmts = Stmts {
-        attr_arguments: AttrArguments {
-            lexer_arguments: None,
+
+    let graph = pathway_graph![
+        Step::IdxWithFragment { // 0
+            idx: 0,
+            fragment: start,
         },
-        stmts: vec![
-            // start ::= (a:a b:b)**;
-            Stmt {
-                lhs: start,
-                body: vec![
-                    (
-                        0,
-                        Rhs(vec![
-                            RhsElement {
-                                bind: None,
-                                elem: RhsAst::Sequence(Sequence {
-                                    rhs: Rhs(vec![
-                                        RhsElement {
-                                            bind: None,
-                                            elem: RhsAst::Sequence(Sequence {
-                                                rhs: Rhs(vec![
-                                                    RhsElement {
-                                                        bind: Some(bind_a),
-                                                        elem: RhsAst::Fragment(a),
-                                                    },
-                                                    RhsElement {
-                                                        bind: Some(bind_b),
-                                                        elem: RhsAst::Fragment(b),
-                                                    }
-                                                ]),
-                                                min: 0,
-                                                max: None,
-                                            })
-                                        }
-                                    ]),
-                                    min: 0,
-                                    max: None,
-                                })
-                            }
-                        ]),
-                        Action {
-                            expr: None,
-                        }
-                    )
-                ],
-                ty: None,
+        Step::Sequence { min: 0, max: None }, // 1
+        Step::Sequence { min: 0, max: None }, // 2
+        [
+            Step::Bind(bind_a), // 3
+            Step::IdxWithFragment { // 4
+                idx: 0,
+                fragment: a,
             },
         ],
-        lexer: None,
-    };
-    let mut flatten = FlattenStmts::new();
-    flatten.flatten_stmts(&stmts);
-
-    let expected_paths = vec![
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::Bind(bind_a),
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: a,
-                },
-            ]
-        },
-        Path {
-            position: vec![
-                Position::IdxWithFragment {
-                    idx: 0,
-                    fragment: start,
-                },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::Bind(bind_b),
-                Position::IdxWithFragment {
-                    idx: 1,
-                    fragment: b,
-                },
-            ]
-        },
+        [
+            Step::Bind(bind_b), // 5
+            Step::IdxWithFragment { // 6
+                idx: 1,
+                fragment: b,
+            },
+        ],
     ];
     assert_eq!(flatten.paths, expected_paths);
 
@@ -109,49 +48,49 @@ fn test_multilevel_sequence() {
     let mut trace = Trace::from_stmts(&stmts);
     let expected_tokens = btreemap! {
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None }
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::Sequence { min: 0, max: None }
             ]
         } => TraceToken::LParen,
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::IdxWithFragment { idx: 0, fragment: a }
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::Sequence { min: 0, max: None },
+                Step::IdxWithFragment { idx: 0, fragment: a }
             ]
         } => TraceToken::Fragment(a),
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::IdxWithFragment { idx: 1, fragment: b }
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::Sequence { min: 0, max: None },
+                Step::IdxWithFragment { idx: 1, fragment: b }
             ]
         } => TraceToken::Fragment(b),
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::SequenceEnd
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::Sequence { min: 0, max: None },
+                Step::SequenceEnd
             ]
         } => TraceToken::RParen,
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::Sequence { min: 0, max: None },
-                Position::SequenceToken
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::Sequence { min: 0, max: None },
+                Step::SequenceToken
             ]
         } => TraceToken::Star,
         Path {
-            position: vec![
-                Position::IdxWithFragment { idx: 0, fragment: start },
-                Position::Sequence { min: 0, max: None },
-                Position::SequenceToken
+            steps: vec![
+                Step::IdxWithFragment { idx: 0, fragment: start },
+                Step::Sequence { min: 0, max: None },
+                Step::SequenceToken
             ]
         } => TraceToken::Star,
         // Path {

@@ -17,7 +17,7 @@ pub enum TransformationError {
 
 impl fmt::Display for TransformationError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.description())
+        write!(f, "{}", self.to_string())
     }
 }
 

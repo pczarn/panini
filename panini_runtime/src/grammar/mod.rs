@@ -85,6 +85,14 @@ impl<T> Rule<T> {
         }
     }
 
+    fn is_sum(&self) -> bool {
+        if let &Rule::Sum(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
     fn factors(self) -> Vec<Rule<T>> {
         if let Rule::Product(factors) = self {
             factors

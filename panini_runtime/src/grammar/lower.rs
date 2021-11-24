@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use panini_logic::input::ast::{
-    InputTree, Pathway, Step,
+    InputTree, PathwayGraph, Step,
 };
 use panini_logic::input::attr_arguments::AttrArguments;
 use panini_logic::input::{ExprId, FragmentId};
@@ -10,29 +10,34 @@ use panini_logic::output::instruction::InstructionList;
 
 use crate::enum_stream::EnumStreamGrammar;
 use crate::grammar::parser::{Parser, Tables};
-use crate::grammar::{Grammar, Rule};
+use crate::grammar::{Grammar, Rule, Summand};
+
+struct Lower<N> {
+    tables: Tables<N>,
+    pathway_graph: PathwayGraph,
+}
 
 impl<N, T> Grammar<N, T> {
+    pub fn make_lower(rules: BTreeMap<String, Rule<N>>) -> Lower<N> {
+        let mut lower = Lower::new();
+        for (lhs, rule) in self.rules.into_iter() {
+            lower.lower_rhs(Some(lhs), rule);
+        }
+        lower
+    }
+
     pub fn lower(self) -> Parser<N, T>
     where
         T: Copy,
     {
         let mut parser = Parser::new(self.sub);
-        let mut stmts = vec![];
-        for (lhs, rule) in self.rules {
-            let lhs = parser.tables.intern_fragment(lhs);
-            let body = parser.tables.lower_sum(rule);
-            stmts.push(Stmt {
-                lhs,
-                body,
-                ty: None,
-            });
-        }
-        let stmts = Stmts {
+        let lower = Grammar::make_lower(self.rules);
+        parser.tables = lower.tables;
+        let stmts = InputTree {
             attr_arguments: AttrArguments {
                 lexer_arguments: None,
             },
-            stmts,
+            pathway_graph: lower.pathway_graph,
             lexer: Some(0),
         };
         parser.process(stmts);
@@ -40,73 +45,62 @@ impl<N, T> Grammar<N, T> {
     }
 }
 
-impl<N> Tables<N> {
-    fn lower_sum(&mut self, rule: Rule<N>) -> Pathway {
+impl<N> Lower<N> {
+    fn new() -> Self {
+        Lower {
+            tables: Tables::new(),
+            pathway_graph: PathwayGraph::new(),
+        }
+    }
+
+    fn lower_rhs(&mut self, lhs: Option<String>, rule: Rule<N>) -> usize {
+        assert!(lhs.none() ^ rule.is_sum());
         match rule {
             Rule::Sum(summands) => {
-                Pathway {
-                    steps: vec![]
-                    tail: vec![]
-                }
-                summands
-                .into_iter()
-                .map(|summand| {
-                    let expr = Some(self.intern_action(summand.action.clone()));
-                    (0, self.lower_rhs(summand.rule), Action { expr })
-                })
-                .collect()
+                self.pathway_graph.step_node(
+                    Step::StmtFragment(lhs),
+                    self.pathway_graph.branch_node(
+                        self.lower_summands(lhs.unwrap(), summands)
+                    ),
+                )
             }
-            _ => unreachable!(),
-        }
-    }
-
-    fn lower_rhs(&mut self, rule: Rule<N>) -> Pathway {
-        match rule {
-            Rule::Sum(..) => unreachable!(),
-            Rule::Bound(rule, bound) => {
-                self.lower_rhs().prepend(Step::Bind { bind_id: 0, idx: 0 })
+            Rule::Bound(inner_rule, bound) => {
+                let (bind_id, idx) = (0, 0);
+                self.pathway_graph.step_node(
+                    Step::Bind { bind_id, idx },
+                    self.lower_rhs(None, *inner_rule),
+                )
             }
             Rule::Call(callee) => {
-                let step = Step::Fragment(self.intern_fragment(callee));
-                Pathway {
-                    steps: vec![step],
-                    tail: vec![],
-                }
+                self.pathway_graph.step_node(
+                    Step::Fragment(self.intern_fragment(callee)),
+                    NULL_NODE,
+                )
             }
-            Rule::Repeat(rule) => {
-                let (min, max) = (0, None)
-                self.lower_rhs(*rule).prepend(Step::Sequence { min, max })
+            Rule::Repeat(inner_rule) => {
+                let (min, max) = (0, None);
+                self.pathway_graph.step_node(
+                    Step::Sequence { min, max },
+                    self.lower_rhs(None, *inner_rule),
+                )
             }]),
             Rule::Product(factors) => {
-                let lower_factor = |factor| self.lower_rhs(factor).simplify();
-                Pathway {
-                    steps: vec![],
-                    tail: factors.into_iter().map(lower_factor).collect(),
-                }
+                self.pathway_graph.branch_node(
+                    factors.into_iter().map(|factor| self.lower_rhs(None, factor))
+                )
             }
         }
     }
 
-    fn lower_rhs_ast(&mut self, rule: Rule<N>) -> RhsAst {
-        match rule {
-            Rule::Sum(..) => unreachable!(),
-            Rule::Bound(rule, bound) => RhsAst::Product(Rhs(vec![RhsElement {
-                bind: Some(0),
-                elem: self.lower_rhs_ast(*rule),
-            }])),
-            Rule::Call(callee) => RhsAst::Fragment(self.intern_fragment(callee)),
-            Rule::Repeat(rule) => RhsAst::Sequence(Sequence {
-                rhs: self.lower_rhs(*rule),
-                min: 0,
-                max: None,
-            }),
-            Rule::Product(factors) => RhsAst::Product(Rhs(factors
-                .into_iter()
-                .map(|factor| RhsElement {
-                    bind: None,
-                    elem: self.lower_rhs_ast(factor),
-                })
-                .collect())),
+    fn lower_summands(&mut self, summands: Vec<Summand<N>>) -> Vec<usize> {
+        for (i, summand) in summands.iter().enumerate() {
+            self.stmt_map.insert((lhs, i), self.intern_action(summand.action));
         }
+        summands.into_iter().enumerate().map(|(i, summand)|
+            self.pathway_graph.step_node(
+                Step::StmtIdx(i),
+                self.lower_rhs(summand.rule),
+            )
+        ).collect()
     }
 }

@@ -208,7 +208,7 @@ impl TypeCollector {
         //                       .map(map).collect();
         // self.types = types;
 
-        for path in &input_tree.paths {
+        for path in &input_tree.pathway_graph.paths() {
             path.prefixes()
                 .rev()
                 .filter(|prefix| prefix.position.len() >= 2)
