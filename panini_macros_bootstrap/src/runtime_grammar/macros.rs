@@ -1,4 +1,4 @@
-macro_rules! grammar {
+macro_rules! runtime_grammar {
     (
         sub $sub_name:ident -> ($Terminal:ty) $sub_content:tt
         $(
@@ -33,59 +33,15 @@ macro_rules! grammar {
                     }
                 )*
             }
-            fn new_grammar(sub: crate::EnumStreamGrammar<$Terminal>) -> crate::Grammar<__RetTy, $Terminal> {
-                use ::std::collections::BTreeMap;
-                crate::Grammar {
-                    rules: BTreeMap::new(),
-                    sub,
-                }
-            }
-            let mut grammar = new_grammar($sub_name!([-> $Terminal, __RetTy] $sub_content));
+            let mut grammar: crate::Grammar<__RetTy, $Terminal>;
+            grammar = crate::Grammar::new($sub_name!([-> $Terminal, __RetTy] $sub_content));
             $(
                 grammar.rule(
                     stringify!($lhs),
                     rule!($($rule [__RetTy::$lhs]=> {{$($action_tts)*}})|+),
                 );
             )*
-            // $(
-            //     $sub_name!(grammar, $sub_content);
-            // )*
-            grammar.lower()
-        }
-    )
-}
-
-macro_rules! grammar_make_lower {
-    (
-        $(
-            $lhs:ident
-            ->
-            ($rule_ty:ty)
-            ::=
-            $(
-                $rule:tt
-                =>
-                {$($action_tts:tt)*}
-            )|+
-            ;
-        )*
-    ) => (
-        {
-            fn new_grammar() -> crate::Grammar<(), ()> {
-                use ::std::collections::BTreeMap;
-                crate::Grammar {
-                    rules: BTreeMap::new(),
-                    sub: crate::EnumStreamGrammar::new(),
-                }
-            }
-            let mut grammar =  new_grammar();
-            $(
-                grammar.rule(
-                    stringify!($lhs),
-                    rule!($($rule [__RetTy::$lhs]=> {{$($action_tts)*}})|+),
-                );
-            )*
-            crate::Grammar::make_lower(grammar.rules)
+            grammar.parser()
         }
     )
 }

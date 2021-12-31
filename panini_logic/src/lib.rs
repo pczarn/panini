@@ -15,10 +15,7 @@ extern crate enum_coder;
 #[macro_use]
 extern crate maplit;
 
-#[macro_use]
-pub mod middle;
-pub mod input;
-pub mod output;
+pub mod tokens;
 
 use middle::ir::Ir;
 use middle::error::TransformationError;
@@ -26,38 +23,66 @@ use input::PathwayGraph;
 use output::instruction::InstructionList;
 use output::translator::IrTranslator;
 
-pub fn process(input: PathwayGraph) -> Result<InstructionList, TransformationError> {
-    phase_1_lower_to_ir(input).map(phase_2_translate)
+const STAGES_PROCESS: &'static [fn(tokens::Tokens) -> tokens::Tokens] = [
+    stage0::process,
+    stage1::process,
+];
+
+const NUM_STAGES: usize = 2;
+
+enum Stage {
+    Begin(Vec<tokens::Tokens>),
+    Check(Vec<tokens::Tokens>),
+    None,
 }
 
-pub fn phase_1_lower_to_ir(input: PathwayGraph) -> Result<Ir, TransformationError> {
-    Ir::transform(input)
-}    
-
-pub fn phase_2_translate(ir: Ir) -> InstructionList {
-    IrTranslator::new(ir).generate()
+struct StageList {
+    list: Vec<Stage>,
 }
 
-// fn report_error(ecx: &mut rs::ExtCtxt, sp: rs::Span, error: &TransformationError) {
-//     match error {
-//         &TransformationError::RecursiveType(ref types) => {
-//             for rule in types {
-//                 let mut diag = ecx.struct_span_err(rule.lhs.span, error.description());
-//                 let cause_spans = rule.causes.iter().map(|c| c.span).collect();
-//                 let multispan = rs::MultiSpan::from_spans(cause_spans);
-//                 let msg = if multispan.primary_spans().len() == 1 {
-//                     "this symbol has a recursive type:"
-//                 } else {
-//                     "these symbols have recursive types:"
-//                 };
-//                 diag.span_note(multispan, msg);
-//                 diag.emit();
+pub fn process(input: tokens::Tokens) -> stage10::Output {
+    let stage_list = parse_stage_list(input);
+    STAGES_PROCESS.iter().zip(stage_list.list.iter().chain(iter::once))
+    stage0::process(input)
+}
+
+// fn parse_stage_list(input: tokens::Tokens) -> StageList {
+//     let mut current_stage = 0;
+//     let mut stage_tokens: HashMap<usize, Vec<tokens::Tokens>>;
+//     let mut tokens_iter = input.tokens.into_iter();
+//     let append = |token| { stage_tokens.entry(current_stage).or_insert(vec![]).push(token); };
+//     while let Some(token) = tokens_iter {
+//         match token {
+//             Token::Pound => {
+//                 match (tokens_iter.as_slice().get(0), tokens_iter.as_slice().get(1), tokens_iter.as_slice().get(2)) {
+//                     (
+//                         Some(&Token::OpenDelim(DelimToken::Bracket)),
+//                         Some(&Token::Ident(ref attr_name)),
+//                         Some(&Token::CloseDelim(DelimToken::Bracket)),
+//                     ) if attr_name.starts_with("stage") => {
+//                         let stage_num: Option<u32> = attr_name["stage".len() ..].parse();
+//                         match stage_num {
+//                             Some(num) => {
+//                                 current_stage = num;
+//                                 true
+//                             }
+//                             None => {
+//                                 Some(Token::Pound)
+//                             }
+//                         }
+//                     }
+//                     _ => {
+//                         Some(Token::Pound)
+//                     }
+//                 }
 //             }
-//         }
-//         _ => {
-//             ecx.span_err(sp, error.description());
-//             ecx.parse_sess.span_diagnostic.abort_if_errors();
-//             panic!();
+//             Token::OpenDelim(DelimToken::Brace) => {
+
+//                 Some(other)
+//             }
+//             other => {
+//                 Some(other)
+//             }
 //         }
 //     }
 // }
