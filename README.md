@@ -12,6 +12,10 @@ Panini uses **[gearley](https://github.com/pczarn/gearley)** for Earley parsing,
 which can handle all context-free grammars. If you write a grammar for a
 language, it will work as expected.
 
+### Motivation
+
+Months of research on parsing algorithms led me to believe that the Earley/Marpa algorithm is the best parsing tool for many purposes. Earley's is simple, flexible and extensible. Alas, nobody made an advanced parser generator that would realize the full potential of the algorithm. Therefore I resolved to make one.
+
 ### Syntax and semantics of grammar description
 
 User-friendliness is harder to achieve in a statically typed language such as Rust.
@@ -65,6 +69,12 @@ The following libraries were created for Panini.
 > I'd be very happy to have a superfast general parser out there but some extremely bright minds have been unable to solve it for 40 years.
 
  — Terence Parr, author of ANTLR
+
+### Thanks
+
+Thanks to Jay Earley, Jeffrey Kegler, John Aycock, R. Nigel Horspool, and Elizabeth Scott who pioneered Earley parsing.
+
+Special thanks to CD PROJEKT RED, HAEVN, Kaśka Sochacka, sanah, Kwiat Jabłoni, Carbon Based Lifeforms, and Solar Fields for providing amazing music, which made coding even more enjoyable.
 
 ### License
 
