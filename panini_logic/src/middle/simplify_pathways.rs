@@ -82,17 +82,11 @@ pub struct SimplifyPathways {
 
 impl Step {
     fn is_bind(&self) -> bool {
-        match self {
-            &Step::Bind { .. } => true,
-            _ => false,
-        }
+        matches!(self, &Step::Bind { .. })
     }
 
     fn is_sequence(&self) -> bool {
-        match self {
-            &Step::Sequence { .. } => true,
-            _ => false,
-        }
+        matches!(self, &Step::Sequence { .. })
     }
 }
 
