@@ -96,6 +96,13 @@ impl ::std::fmt::Debug for Input {
 
 impl Input {
     fn reduce(&self) -> TokenStream {
+        let more_than_only_one_fragment_or_sequence = |(i, id)| {
+            match (i, self.graph.get(id).unwrap()) {
+                (0, Step::Fragment(..)) => false,
+                (0, Step::Sequence { .. }) => false,
+                _ => true,
+            }
+        };
         let mut content = vec![None; self.graph.nodes.len()];
         for no_outgoing in self.graph.walk() {
             let token_stream = match self.graph.get(no_outgoing.id) {
@@ -110,13 +117,6 @@ impl Input {
                     let mut stream = TokenStream::new();
                     let children: Vec<_> = no_outgoing.children.collect();
                     stream.extend(children.iter().cloned().map(|id| content[id as usize].clone().unwrap()));
-                    let more_than_only_one_fragment_or_sequence = |(i, id)| {
-                        match (i, self.graph.get(id).unwrap()) {
-                            (0, Step::Fragment(..)) => false,
-                            (0, Step::Sequence { .. }) => false,
-                            _ => true,
-                        }
-                    };
                     let add_parentheses = children.into_iter().enumerate().any(more_than_only_one_fragment_or_sequence);
                     if add_parentheses {
                         quote! { ( #stream ) * }
@@ -142,8 +142,14 @@ impl Input {
                     let ident = nth.as_ref().expect("incorrect id in Bind { bind_id }");
                     let ident = TokenTree::Ident(Ident::new(ident, Span::call_site()));
                     let mut rhs = TokenStream::new();
-                    rhs.extend(no_outgoing.children.map(|id| content[id as usize].clone().unwrap()));
-                    quote! { #ident : #rhs }
+                    let children: Vec<_> = no_outgoing.children.collect();
+                    rhs.extend(children.iter().map(|&id| content[id as usize].clone().unwrap()));
+                    let add_parentheses = children.into_iter().enumerate().any(more_than_only_one_fragment_or_sequence);
+                    if add_parentheses {
+                        quote! { #ident : ( #rhs ) }
+                    } else {
+                        quote! { #ident : #rhs }
+                    }
                 }
                 Some(Step::StmtFragment(fragment_id)) => {
                     let mut nth = self.lhs_set.iter().nth(fragment_id as usize);
