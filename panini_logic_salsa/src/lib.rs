@@ -374,7 +374,7 @@ macro_rules! rule {
             ]
         }
     };
-    (input: $input:expr, ( $name:ident : $rhs:ident )) => {
+    (input: $input:expr, ( $name:ident : $rhs:tt )) => {
         {
             let step = Step::Bind { bind_id: $input.intern_bind(stringify!($name)), idx: 0 };
             let children = rule!(input: $input, $rhs);
@@ -557,8 +557,12 @@ mod tests {
                     // 6
                 }
                 rewritten == {
-                    start@0 * => start ::= 0 generated[3]* 6;
-                    start@0 * * => generated[3] ::= (1 a 2 b 3)* 5;
+                    start@0 * => {
+                        start ::= 0 generated[3]* 6;
+                    }
+                    start@0 * * => {
+                        generated[3] ::= (1 a 2 b 3)* 5;
+                    }
                 }
                 types == {
                     start@0: {
@@ -575,6 +579,64 @@ mod tests {
                     };
                     start@0 * * a: typeof a;
                     start@0 * * b: typeof b;
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn bound_multilevel() {
+        verify(
+            input!(
+                start ::= (s:((a:a) (b:b)));
+            ),
+            quote! {
+                input == {
+                    start ::= s:(a:a b:b);
+                }
+                types == {
+                    start@0: {
+                        s: {
+                            a: typeof a,
+                            b: typeof b,
+                        }
+                    }
+                }
+                typedefs == {
+                    struct Gen0 {
+                        a: Terminal,
+                        b: Terminal,
+                    }
+
+                    struct Gen1 {
+                        s: Gen0,
+                    }
+                }
+                typedefs_and_rules == {
+                    start -> Type1 ::= s:[sym0]* => { Type1 { s } };
+                    sym0 -> Type0 ::= a:a b:b => { Type0 { a, b } };
+                    struct Type0 {
+                        a: Terminal,
+                        b: Terminal,
+                    }
+                    struct Type1 {
+                        s: Vec<Type0>,
+                    }
+                }
+                stage3 == {
+                    #![terminals(a, b)]
+                    start -> Type1 ::= bind0:sym1 => { bind0 };
+                    sym1 -> Type1 ::= s:sym2 => { Type1 { s } };
+                    sym2 -> Vec<Type0> ::= bind0:sym2 bind1:sym0 => { bind0.push(bind1); bind0 }
+                        | [] => { Vec::new() };
+                    sym0 -> Type0 ::= a:a b:b => { Type0 { a, b } };
+                    struct Type0 {
+                        a: Terminal,
+                        b: Terminal,
+                    }
+                    struct Type1 {
+                        s: Vec<Type0>,
+                    }
                 }
             }
         );
