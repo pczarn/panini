@@ -8,7 +8,7 @@ use input::RustTyId;
 
 //type RustTy = rs::P<rs::Ty>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Ty<S = Symbol> {
     RustTy(RustTyId),
     RustTerminalTy,
@@ -44,11 +44,7 @@ impl<S> Ty<S> {
     }
 
     pub fn is_terminal(&self) -> bool {
-        if let &Ty::RustTerminalTy = self {
-            true
-        } else {
-            false
-        }
+        &Ty::RustTerminalTy == self
     }
 }
 
