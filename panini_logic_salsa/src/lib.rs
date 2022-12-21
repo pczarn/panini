@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_set::Range;
 use std::rc::Rc;
+use std::mem;
 
 use elsa::FrozenIndexSet;
 use quote::quote;
@@ -354,12 +355,11 @@ macro_rules! rule {
 
 use proc_macro2::{TokenTree, Delimiter};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 enum VerifyState {
-    ExpectGroupName,
-    ExpectEq { group_name: String },
-    ExpectNextEq { group_name: String },
-    ExpectBrace { group_name: String },
+    ExpectName,
+    ExpectEq,
+    ExpectContent,
 }
 
 #[derive(Clone, Debug)]
@@ -368,34 +368,35 @@ struct VerifyGroup {
     content: TokenStream,
 }
 
+impl VerifyGroup {
+    fn new() -> Self {
+        VerifyGroup { name: String::new(), content: TokenStream::new() }
+    }
+}
+
 fn verify(input: Input, tokens: TokenStream) {
     let mut groups = vec![];
-    let mut state = VerifyState::ExpectGroupName;
-    for token_tree in tokens.into_iter() {
-        match (token_tree, state.clone()) {
-            (TokenTree::Ident(ident), VerifyState::ExpectGroupName) => {
-                state = VerifyState::ExpectEq { group_name: ident.to_string() };
+    let mut what_to_expect = vec![
+        VerifyState::ExpectName,
+        VerifyState::ExpectEq,
+        VerifyState::ExpectEq,
+        VerifyState::ExpectContent,
+    ].into_iter().cycle();
+    let mut state = VerifyGroup::new();
+    for (token_tree, step) in tokens.into_iter().zip(what_to_expect) {
+        match (token_tree, step) {
+            (TokenTree::Ident(ident), VerifyState::ExpectName) => {
+                state.name = ident.to_string();
             }
-            (TokenTree::Punct(punct), VerifyState::ExpectEq { group_name }) => {
+            (TokenTree::Punct(punct), VerifyState::ExpectEq) => {
                 assert_eq!(punct.as_char(), '=');
-                state = VerifyState::ExpectNextEq { group_name };
             }
-            (TokenTree::Punct(punct), VerifyState::ExpectNextEq { group_name }) => {
-                assert_eq!(punct.as_char(), '=');
-                state = VerifyState::ExpectBrace { group_name };
-            }
-            (TokenTree::Group(group), VerifyState::ExpectBrace { group_name })  => {
+            (TokenTree::Group(group), VerifyState::ExpectContent)  => {
                 assert_eq!(group.delimiter(), Delimiter::Brace);
-                groups.push(
-                    VerifyGroup {
-                        name: group_name,
-                        content: group.stream(),
-                    }
-                );
-                state = VerifyState::ExpectGroupName;
+                groups.push(mem::replace(&mut state, VerifyGroup::new()));
             }
-            (token_tree, state) => {
-                panic!("unexpected token tree {:?}, current state {:?}", token_tree, state);
+            (token_tree, step) => {
+                panic!("unexpected token tree {:?}, current state {:?}", token_tree, step);
             }
         }
     }
@@ -473,8 +474,8 @@ mod tests {
                     start ::= (a:a b:b)**;
                 }
                 flattened == {
-                    start@0 a@0;
-                    start@0 b@1;
+                    start .0 a@0;
+                    start .0 b@1;
                 }
                 trace == {
                     // 0
@@ -506,11 +507,11 @@ mod tests {
                     };
                     start .0 *: {
                         * a: [typeof a],
-                        * b: [typeof b]
+                        * b: [typeof b],
                     };
                     start .0 * *: {
                         a: typeof a,
-                        b: typeof b
+                        b: typeof b,
                     };
                     start .0 * * a: typeof a;
                     start .0 * * b: typeof b;
@@ -530,7 +531,7 @@ mod tests {
                     start ::= s:(a:a b:b);
                 }
                 types == {
-                    start@0: {
+                    start .0: {
                         s: {
                             a: typeof a,
                             b: typeof b,
