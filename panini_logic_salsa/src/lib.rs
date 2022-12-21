@@ -71,13 +71,11 @@ trait ProvideInput {
 
     fn tokenize_node(&self, node_id: NodeId) -> ComparableTokenStream;
 
-    fn tokenize_each_child(&self, node_id: NodeId) -> Vec<ComparableTokenStream>;
-
-    fn need_parentheses_around_children(&self, node_id: NodeId) -> bool;
-
     fn get_node(&self, node_id: NodeId) -> Option<Step>;
 
     fn get_sym(&self, fragment_id: FragmentId) -> String;
+
+    fn get_bind(&self, bind_id: BindId) -> String;
 
     fn tokenize_children(
         &self,
@@ -86,72 +84,21 @@ trait ProvideInput {
         may_add_parentheses: bool,
     ) -> ComparableTokenStream;
 
-    fn get_bind(&self, bind_id: BindId) -> String;
+    fn tokenize_each_child(&self, node_id: NodeId) -> Vec<ComparableTokenStream>;
+
+    fn need_parentheses_around_children(&self, node_id: NodeId) -> bool;
 }
 
-fn get_node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
-    db.input().graph.get(node_id)
+fn pretty_input(db: &dyn ProvideInput) -> String {
+    db.tokenize_input().to_string()
 }
 
-fn get_bind(db: &dyn ProvideInput, bind_id: BindId) -> String {
-    let input = db.input();
-    let mut nth = input.bind_set.iter().nth(bind_id as usize);
-    nth.as_ref()
-        .expect("incorrect id in Bind { bind_id }")
-        .to_string()
-}
-
-fn get_sym(db: &dyn ProvideInput, fragment_id: FragmentId) -> String {
-    let input = db.input();
-    let mut nth = input.lhs_set.iter().nth(fragment_id as usize);
-    nth.as_ref()
-        .expect("incorrect id in Fragment(fragment_id)")
-        .to_string()
-}
-
-fn tokenize_each_child(db: &dyn ProvideInput, node_id: NodeId) -> Vec<ComparableTokenStream> {
-    db.input()
-        .graph
-        .children(node_id)
-        .map(|child_id| db.tokenize_node(child_id))
-        .collect()
-}
-
-fn need_parentheses_around_children(db: &dyn ProvideInput, node_id: NodeId) -> bool {
-    db.input()
-        .graph
-        .children(node_id)
-        .enumerate()
-        .any(|(i, id)| match (i, db.input().graph.get(id).unwrap()) {
-            (0, Step::Fragment(..)) => false,
-            (0, Step::Sequence { .. }) => false,
-            _ => true,
-        })
-}
-
-fn tokenize_children(
-    db: &dyn ProvideInput,
-    node_id: NodeId,
-    separator: Option<ComparableTokenStream>,
-    may_add_parentheses: bool,
-) -> ComparableTokenStream {
-    let mut inner = TokenStream::new();
-    if let Some(separator) = separator {
-        inner.extend(
-            db.tokenize_each_child(node_id)
-                .into_iter()
-                .intersperse(separator)
-                .map(|s| s.0),
-        );
-    } else {
-        inner.extend(db.tokenize_each_child(node_id).into_iter().map(|s| s.0));
+fn tokenize_input(db: &dyn ProvideInput) -> ComparableTokenStream {
+    let mut result = TokenStream::new();
+    for root_id in db.input().graph.roots() {
+        result.extend(db.tokenize_node(root_id).0);
     }
-    let add_parentheses = db.need_parentheses_around_children(node_id) && may_add_parentheses;
-    if add_parentheses {
-        quote! { ( #inner ) }.into()
-    } else {
-        inner.into()
-    }
+    result.into()
 }
 
 fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStream {
@@ -190,16 +137,69 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
     .into()
 }
 
-fn tokenize_input(db: &dyn ProvideInput) -> ComparableTokenStream {
-    let mut result = TokenStream::new();
-    for root_id in db.input().graph.roots() {
-        result.extend(db.tokenize_node(root_id).0);
-    }
-    result.into()
+fn get_node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
+    db.input().graph.get(node_id)
 }
 
-fn pretty_input(db: &dyn ProvideInput) -> String {
-    db.tokenize_input().to_string()
+fn get_sym(db: &dyn ProvideInput, fragment_id: FragmentId) -> String {
+    let input = db.input();
+    let mut nth = input.lhs_set.iter().nth(fragment_id as usize);
+    nth.as_ref()
+        .expect("incorrect id in Fragment(fragment_id)")
+        .to_string()
+}
+
+fn get_bind(db: &dyn ProvideInput, bind_id: BindId) -> String {
+    let input = db.input();
+    let mut nth = input.bind_set.iter().nth(bind_id as usize);
+    nth.as_ref()
+        .expect("incorrect id in Bind { bind_id }")
+        .to_string()
+}
+
+fn tokenize_children(
+    db: &dyn ProvideInput,
+    node_id: NodeId,
+    separator: Option<ComparableTokenStream>,
+    may_add_parentheses: bool,
+) -> ComparableTokenStream {
+    let mut inner = TokenStream::new();
+    if let Some(separator) = separator {
+        inner.extend(
+            db.tokenize_each_child(node_id)
+                .into_iter()
+                .intersperse(separator)
+                .map(|s| s.0),
+        );
+    } else {
+        inner.extend(db.tokenize_each_child(node_id).into_iter().map(|s| s.0));
+    }
+    let add_parentheses = db.need_parentheses_around_children(node_id) && may_add_parentheses;
+    if add_parentheses {
+        quote! { ( #inner ) }.into()
+    } else {
+        inner.into()
+    }
+}
+
+fn tokenize_each_child(db: &dyn ProvideInput, node_id: NodeId) -> Vec<ComparableTokenStream> {
+    db.input()
+        .graph
+        .children(node_id)
+        .map(|child_id| db.tokenize_node(child_id))
+        .collect()
+}
+
+fn need_parentheses_around_children(db: &dyn ProvideInput, node_id: NodeId) -> bool {
+    db.input()
+        .graph
+        .children(node_id)
+        .enumerate()
+        .any(|(i, id)| match (i, db.input().graph.get(id).unwrap()) {
+            (0, Step::Fragment(..)) => false,
+            (0, Step::Sequence { .. }) => false,
+            _ => true,
+        })
 }
 
 #[salsa::database(ProvideInputStorage)]
