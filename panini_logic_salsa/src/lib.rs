@@ -315,8 +315,8 @@ macro_rules! input {
                     )*
                 ];
                 let children = args.into_iter().map(
-                    |(step, children_vec)| {
-                        input.graph.node(step, children_vec)
+                    |(step, child_node_id)| {
+                        input.graph.node(step, vec![child_node_id])
                     }
                 ).collect();
                 let step = Step::StmtFragment(input.intern_fragment(lhs_str));
@@ -334,27 +334,21 @@ macro_rules! rule {
     (input: $input:expr, $rhs:ident) => {
         {
             let step = Step::Fragment($input.intern_fragment(stringify!($rhs)));
-            vec![
-                $input.graph.node(step, vec![])
-            ]
+            $input.graph.node(step, vec![])
         }
     };
     (input: $input:expr, ( $name:ident : $rhs:tt )) => {
         {
             let step = Step::Bind { bind_id: $input.intern_bind(stringify!($name)), idx: 0 };
-            let children = rule!(input: $input, $rhs);
-            vec![
-                $input.graph.node(step, children)
-            ]
+            let child = rule!(input: $input, $rhs);
+            $input.graph.node(step, vec![child])
         }
     };
     (input: $input:expr, ( $rhs:tt * )) => {
         {
             let step = Step::Sequence { min: 0, max: None };
-            let children = rule!(input: $input, $rhs);
-            vec![
-                $input.graph.node(step, children)
-            ]
+            let child = rule!(input: $input, $rhs);
+            $input.graph.node(step, vec![child])
         }
     };
     (input: $input:expr, ( $($rhs:tt)* )) => {
@@ -363,27 +357,12 @@ macro_rules! rule {
                 $(
                     rule!(input: $input, $rhs),
                 )*
-            ].into_iter().flat_map(|v| v.into_iter()).collect::<Vec<_>>();
-            vec![
-                $input.graph.node(Step::Idx(IdxKind::Product, 0), children)
-            ]
-            // TODO: only single node returned, not vec![ node ]
+            ];
+            $input.graph.node(Step::Idx(IdxKind::Product, 0), children)
             // TODO: IdxKind::Product does not need a usize?
         }
     };
 }
-
-// macro_rules! declare_binds {
-//     ([$input:ident] $rhs:ident) => ();
-
-//     ([$input:ident] ($name:ident : $rhs:ident)) => (
-//         let $name = $input.pop().unwrap().$rhs();
-//     );
-
-//     ([$input:ident] ($($rhs:tt)*)) => {
-//         $(declare_binds!([$input] $rhs);)*
-//     };
-// }
 
 use proc_macro2::{Delimiter, TokenTree};
 
@@ -430,6 +409,7 @@ fn verify(input: Input, tokens: TokenStream) {
             }
             (TokenTree::Group(group), VerifyState::ExpectContent) => {
                 assert_eq!(group.delimiter(), Delimiter::Brace);
+                state.content = group.stream();
                 groups.push(mem::replace(&mut state, VerifyGroup::new()));
             }
             (token_tree, step) => {
