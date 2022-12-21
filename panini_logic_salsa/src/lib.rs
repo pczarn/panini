@@ -1,15 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
 use std::collections::btree_set::Range;
-use std::rc::Rc;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
+use std::rc::Rc;
 
 use elsa::FrozenIndexSet;
-use quote::quote;
-use proc_macro2::{TokenStream, Ident, Span};
 use indexmap::IndexSet;
 use itertools::Itertools;
+use proc_macro2::{Ident, Span, TokenStream};
+use quote::quote;
 
-use graph::{PathwayGraph, FragmentId, Step, NodeId, BindId, IdxKind};
+use graph::{BindId, FragmentId, IdxKind, NodeId, PathwayGraph, Step};
 
 extern crate salsa;
 
@@ -79,7 +79,12 @@ trait ProvideInput {
 
     fn get_sym(&self, fragment_id: FragmentId) -> String;
 
-    fn tokenize_children(&self, node_id: NodeId, separator: Option<ComparableTokenStream>, may_add_parentheses: bool) -> ComparableTokenStream;
+    fn tokenize_children(
+        &self,
+        node_id: NodeId,
+        separator: Option<ComparableTokenStream>,
+        may_add_parentheses: bool,
+    ) -> ComparableTokenStream;
 
     fn get_bind(&self, bind_id: BindId) -> String;
 }
@@ -91,33 +96,53 @@ fn get_node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
 fn get_bind(db: &dyn ProvideInput, bind_id: BindId) -> String {
     let input = db.input();
     let mut nth = input.bind_set.iter().nth(bind_id as usize);
-    nth.as_ref().expect("incorrect id in Bind { bind_id }").to_string()
+    nth.as_ref()
+        .expect("incorrect id in Bind { bind_id }")
+        .to_string()
 }
 
 fn get_sym(db: &dyn ProvideInput, fragment_id: FragmentId) -> String {
     let input = db.input();
     let mut nth = input.lhs_set.iter().nth(fragment_id as usize);
-    nth.as_ref().expect("incorrect id in Fragment(fragment_id)").to_string()
+    nth.as_ref()
+        .expect("incorrect id in Fragment(fragment_id)")
+        .to_string()
 }
 
 fn tokenize_each_child(db: &dyn ProvideInput, node_id: NodeId) -> Vec<ComparableTokenStream> {
-    db.input().graph.children(node_id).map(|child_id| db.tokenize_node(child_id)).collect()
+    db.input()
+        .graph
+        .children(node_id)
+        .map(|child_id| db.tokenize_node(child_id))
+        .collect()
 }
 
 fn need_parentheses_around_children(db: &dyn ProvideInput, node_id: NodeId) -> bool {
-    db.input().graph.children(node_id).enumerate().any(|(i, id)| {
-        match (i, db.input().graph.get(id).unwrap()) {
+    db.input()
+        .graph
+        .children(node_id)
+        .enumerate()
+        .any(|(i, id)| match (i, db.input().graph.get(id).unwrap()) {
             (0, Step::Fragment(..)) => false,
             (0, Step::Sequence { .. }) => false,
             _ => true,
-        }
-    })
+        })
 }
 
-fn tokenize_children(db: &dyn ProvideInput, node_id: NodeId, separator: Option<ComparableTokenStream>, may_add_parentheses: bool) -> ComparableTokenStream {
+fn tokenize_children(
+    db: &dyn ProvideInput,
+    node_id: NodeId,
+    separator: Option<ComparableTokenStream>,
+    may_add_parentheses: bool,
+) -> ComparableTokenStream {
     let mut inner = TokenStream::new();
     if let Some(separator) = separator {
-        inner.extend(db.tokenize_each_child(node_id).into_iter().intersperse(separator).map(|s| s.0));
+        inner.extend(
+            db.tokenize_each_child(node_id)
+                .into_iter()
+                .intersperse(separator)
+                .map(|s| s.0),
+        );
     } else {
         inner.extend(db.tokenize_each_child(node_id).into_iter().map(|s| s.0));
     }
@@ -134,19 +159,20 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
         Step::Fragment(fragment_id) => {
             let ident = db.get_sym(fragment_id);
             let mut result = TokenStream::new();
-            result.extend(vec![TokenTree::Ident(Ident::new(&ident[..], Span::call_site()))]);
+            result.extend(vec![TokenTree::Ident(Ident::new(
+                &ident[..],
+                Span::call_site(),
+            ))]);
             result
         }
         Step::Sequence { min: 0, max: None } => {
             let children: TokenStream = db.tokenize_children(node_id, None, true).into();
             quote! { #children * }
         }
-        Step::Idx(IdxKind::Sum, _idx) => {
-            db.tokenize_children(node_id, Some(quote! { | }.into()), false).into()
-        }
-        Step::Idx(IdxKind::Product, _idx) => {
-            db.tokenize_children(node_id, None, false).into()
-        }
+        Step::Idx(IdxKind::Sum, _idx) => db
+            .tokenize_children(node_id, Some(quote! { | }.into()), false)
+            .into(),
+        Step::Idx(IdxKind::Product, _idx) => db.tokenize_children(node_id, None, false).into(),
         Step::Bind { bind_id, idx: _ } => {
             let bind = db.get_bind(bind_id);
             let bind_ident = TokenTree::Ident(Ident::new(&bind[..], Span::call_site()));
@@ -160,7 +186,8 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
             quote! { #lhs ::= #rhs ; }
         }
         other => panic!("UNEXPECTED STEP: {:?}", other),
-    }.into()
+    }
+    .into()
 }
 
 fn tokenize_input(db: &dyn ProvideInput) -> ComparableTokenStream {
@@ -224,7 +251,8 @@ impl ::std::fmt::Debug for Input {
             lhs_set: interner_to_vec(&self.lhs_set),
             bind_set: interner_to_vec(&self.bind_set),
             rule_indices: &self.rule_indices,
-        }.fmt(fmt)
+        }
+        .fmt(fmt)
     }
 }
 
@@ -286,7 +314,11 @@ macro_rules! input {
                         ),
                     )*
                 ];
-                let children = args.into_iter().map(|(step, children_vec)| input.graph.node(step, children_vec)).collect();
+                let children = args.into_iter().map(
+                    |(step, children_vec)| {
+                        input.graph.node(step, children_vec)
+                    }
+                ).collect();
                 let step = Step::StmtFragment(input.intern_fragment(lhs_str));
                 input.graph.node(
                     step,
@@ -353,7 +385,7 @@ macro_rules! rule {
 //     };
 // }
 
-use proc_macro2::{TokenTree, Delimiter};
+use proc_macro2::{Delimiter, TokenTree};
 
 #[derive(Clone, Copy, Debug)]
 enum VerifyState {
@@ -370,7 +402,10 @@ struct VerifyGroup {
 
 impl VerifyGroup {
     fn new() -> Self {
-        VerifyGroup { name: String::new(), content: TokenStream::new() }
+        VerifyGroup {
+            name: String::new(),
+            content: TokenStream::new(),
+        }
     }
 }
 
@@ -381,7 +416,9 @@ fn verify(input: Input, tokens: TokenStream) {
         VerifyState::ExpectEq,
         VerifyState::ExpectEq,
         VerifyState::ExpectContent,
-    ].into_iter().cycle();
+    ]
+    .into_iter()
+    .cycle();
     let mut state = VerifyGroup::new();
     for (token_tree, step) in tokens.into_iter().zip(what_to_expect) {
         match (token_tree, step) {
@@ -391,12 +428,15 @@ fn verify(input: Input, tokens: TokenStream) {
             (TokenTree::Punct(punct), VerifyState::ExpectEq) => {
                 assert_eq!(punct.as_char(), '=');
             }
-            (TokenTree::Group(group), VerifyState::ExpectContent)  => {
+            (TokenTree::Group(group), VerifyState::ExpectContent) => {
                 assert_eq!(group.delimiter(), Delimiter::Brace);
                 groups.push(mem::replace(&mut state, VerifyGroup::new()));
             }
             (token_tree, step) => {
-                panic!("unexpected token tree {:?}, current state {:?}", token_tree, step);
+                panic!(
+                    "unexpected token tree {:?}, current state {:?}",
+                    token_tree, step
+                );
             }
         }
     }
@@ -438,7 +478,7 @@ mod tests {
             input!(
                 start ::= (a b);
             ),
-            quote!{
+            quote! {
                 input == {
                     start ::= a b;
                 }
@@ -448,7 +488,7 @@ mod tests {
                 }
                 trace == {
                     start@0 a.0 => a;
-                    start@0 b.1 => b; 
+                    start@0 b.1 => b;
                 }
                 rewritten == {
                     start ::= 0 a 1 b 2;
@@ -459,7 +499,7 @@ mod tests {
                 program == {
 
                 }
-            }
+            },
         );
     }
 
@@ -469,7 +509,7 @@ mod tests {
             input!(
                 start ::= ((((a:a) (b:b))*)*);
             ),
-            quote!{
+            quote! {
                 input == {
                     start ::= (a:a b:b)**;
                 }
@@ -516,7 +556,7 @@ mod tests {
                     start .0 * * a: typeof a;
                     start .0 * * b: typeof b;
                 }
-            }
+            },
         );
     }
 
@@ -574,7 +614,7 @@ mod tests {
                         s: Vec<Type0>,
                     }
                 }
-            }
+            },
         );
     }
 }
