@@ -3,17 +3,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::mem;
 use std::rc::Rc;
 
-use elsa::FrozenIndexSet;
-use indexmap::IndexSet;
 use itertools::Itertools;
-use proc_macro2::{Ident, Span, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::quote;
 
 use graph::{BindId, FragmentId, IdxKind, NodeId, PathwayGraph, Step};
+use input::{Input, FrozenInput};
+use verify::verify;
 
 extern crate salsa;
 
 mod graph;
+mod input;
+mod verify;
 
 #[derive(Clone)]
 struct ComparableTokenStream(TokenStream);
@@ -71,11 +73,7 @@ trait ProvideInput {
 
     fn tokenize_node(&self, node_id: NodeId) -> ComparableTokenStream;
 
-    fn get_node(&self, node_id: NodeId) -> Option<Step>;
-
-    fn get_sym(&self, fragment_id: FragmentId) -> String;
-
-    fn get_bind(&self, bind_id: BindId) -> String;
+    fn node(&self, node_id: NodeId) -> Option<Step>;
 
     fn tokenize_children(
         &self,
@@ -87,6 +85,8 @@ trait ProvideInput {
     fn tokenize_each_child(&self, node_id: NodeId) -> Vec<ComparableTokenStream>;
 
     fn need_parentheses_around_children(&self, node_id: NodeId) -> bool;
+
+    fn children(&self, node_id: NodeId) -> Vec<NodeId>;
 }
 
 fn pretty_input(db: &dyn ProvideInput) -> String {
@@ -95,19 +95,20 @@ fn pretty_input(db: &dyn ProvideInput) -> String {
 
 fn tokenize_input(db: &dyn ProvideInput) -> ComparableTokenStream {
     let mut result = TokenStream::new();
-    for root_id in db.input().graph.roots() {
+    for root_id in db.input().graph().roots() {
         result.extend(db.tokenize_node(root_id).0);
     }
     result.into()
 }
 
 fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStream {
-    match db.get_node(node_id).expect("invalid node_id") {
+    match db.node(node_id).expect("invalid node_id") {
         Step::Fragment(fragment_id) => {
-            let ident = db.get_sym(fragment_id);
+            let input = db.input();
+            let ident = input.sym(fragment_id).expect("incorrect id in Fragment(fragment_id)");
             let mut result = TokenStream::new();
             result.extend(vec![TokenTree::Ident(Ident::new(
-                &ident[..],
+                ident,
                 Span::call_site(),
             ))]);
             result
@@ -121,14 +122,16 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
             .into(),
         Step::Idx(IdxKind::Product, _idx) => db.tokenize_children(node_id, None, false).into(),
         Step::Bind { bind_id, idx: _ } => {
-            let bind = db.get_bind(bind_id);
-            let bind_ident = TokenTree::Ident(Ident::new(&bind[..], Span::call_site()));
+            let input = db.input();
+            let bind = input.bind(bind_id).expect("incorrect id in Bind { bind_id }");
+            let bind_ident = TokenTree::Ident(Ident::new(bind, Span::call_site()));
             let children: TokenStream = db.tokenize_children(node_id, None, true).into();
             quote! { #bind_ident : #children }
         }
         Step::StmtFragment(fragment_id) => {
-            let lhs_ident = db.get_sym(fragment_id);
-            let lhs = TokenTree::Ident(Ident::new(&lhs_ident[..], Span::call_site()));
+            let input = db.input();
+            let lhs_ident = input.sym(fragment_id).expect("incorrect id in StmtFragment(fragment_id)");
+            let lhs = TokenTree::Ident(Ident::new(lhs_ident, Span::call_site()));
             let rhs: TokenStream = db.tokenize_children(node_id, None, false).into();
             quote! { #lhs ::= #rhs ; }
         }
@@ -137,24 +140,8 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
     .into()
 }
 
-fn get_node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
-    db.input().graph.get(node_id)
-}
-
-fn get_sym(db: &dyn ProvideInput, fragment_id: FragmentId) -> String {
-    let input = db.input();
-    let mut nth = input.lhs_set.iter().nth(fragment_id as usize);
-    nth.as_ref()
-        .expect("incorrect id in Fragment(fragment_id)")
-        .to_string()
-}
-
-fn get_bind(db: &dyn ProvideInput, bind_id: BindId) -> String {
-    let input = db.input();
-    let mut nth = input.bind_set.iter().nth(bind_id as usize);
-    nth.as_ref()
-        .expect("incorrect id in Bind { bind_id }")
-        .to_string()
+fn node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
+    db.input().graph().get(node_id)
 }
 
 fn tokenize_children(
@@ -183,113 +170,35 @@ fn tokenize_children(
 }
 
 fn tokenize_each_child(db: &dyn ProvideInput, node_id: NodeId) -> Vec<ComparableTokenStream> {
-    db.input()
-        .graph
+    db
         .children(node_id)
+        .into_iter()
         .map(|child_id| db.tokenize_node(child_id))
         .collect()
 }
 
 fn need_parentheses_around_children(db: &dyn ProvideInput, node_id: NodeId) -> bool {
-    db.input()
-        .graph
-        .children(node_id)
+    db.children(node_id)
+        .into_iter()
         .enumerate()
-        .any(|(i, id)| match (i, db.input().graph.get(id).unwrap()) {
+        .any(|(i, id)| match (i, db.node(id).unwrap()) {
             (0, Step::Fragment(..)) => false,
             (0, Step::Sequence { .. }) => false,
             _ => true,
         })
 }
 
+fn children(db: &dyn ProvideInput, node_id: NodeId) -> Vec<NodeId> {
+    db.input().graph().children(node_id).collect()
+}
+
 #[salsa::database(ProvideInputStorage)]
 #[derive(Default)]
-struct DatabaseStruct {
+pub(crate) struct DatabaseStruct {
     storage: salsa::Storage<Self>,
 }
 
 impl salsa::Database for DatabaseStruct {}
-
-#[derive(Clone)]
-pub struct Input {
-    graph: PathwayGraph,
-    lhs_set: IndexSet<String>,
-    bind_set: IndexSet<String>,
-    rule_indices: BTreeMap<String, usize>,
-}
-
-pub struct FrozenInput {
-    graph: PathwayGraph,
-    lhs_set: FrozenIndexSet<String>,
-    bind_set: FrozenIndexSet<String>,
-    rule_indices: BTreeMap<String, usize>,
-}
-
-#[derive(Debug)]
-pub struct InputDebug<'a> {
-    graph: &'a PathwayGraph,
-    lhs_set: Vec<String>,
-    bind_set: Vec<String>,
-    rule_indices: &'a BTreeMap<String, usize>,
-}
-
-impl ::std::fmt::Debug for Input {
-    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
-        fn interner_to_vec(set: &IndexSet<String>) -> Vec<String> {
-            let mut result = vec![];
-            for i in 0usize.. {
-                if let Some(elem) = set.get_index(i) {
-                    result.push(elem.to_string());
-                } else {
-                    break;
-                }
-            }
-            result
-        }
-        InputDebug {
-            graph: &self.graph,
-            lhs_set: interner_to_vec(&self.lhs_set),
-            bind_set: interner_to_vec(&self.bind_set),
-            rule_indices: &self.rule_indices,
-        }
-        .fmt(fmt)
-    }
-}
-
-impl FrozenInput {
-    fn new() -> Self {
-        FrozenInput {
-            graph: PathwayGraph::new(),
-            lhs_set: FrozenIndexSet::new(),
-            bind_set: FrozenIndexSet::new(),
-            rule_indices: BTreeMap::new(),
-        }
-    }
-
-    fn intern_fragment(&mut self, ident: &str) -> FragmentId {
-        self.lhs_set.insert_full(ident.to_string()).0 as FragmentId
-    }
-
-    fn intern_bind(&mut self, ident: &str) -> FragmentId {
-        self.bind_set.insert_full(ident.to_string()).0 as FragmentId
-    }
-
-    fn next_stmt_idx(&mut self, lhs_str: &str) -> usize {
-        let entry = self.rule_indices.entry(lhs_str.to_string()).or_insert(0);
-        let result = *entry;
-        *entry += 1;
-        result
-    }
-
-    fn thaw(self) -> Input {
-        Input {
-            graph: self.graph,
-            lhs_set: self.lhs_set.into_set(),
-            bind_set: self.bind_set.into_set(),
-            rule_indices: self.rule_indices,
-        }
-    }
-}
 
 macro_rules! input {
     (
@@ -316,11 +225,11 @@ macro_rules! input {
                 ];
                 let children = args.into_iter().map(
                     |(step, child_node_id)| {
-                        input.graph.node(step, vec![child_node_id])
+                        input.graph_mut().node(step, vec![child_node_id])
                     }
                 ).collect();
                 let step = Step::StmtFragment(input.intern_fragment(lhs_str));
-                input.graph.node(
+                input.graph_mut().node(
                     step,
                     children,
                 );
@@ -334,21 +243,21 @@ macro_rules! rule {
     (input: $input:expr, $rhs:ident) => {
         {
             let step = Step::Fragment($input.intern_fragment(stringify!($rhs)));
-            $input.graph.node(step, vec![])
+            $input.graph_mut().node(step, vec![])
         }
     };
     (input: $input:expr, ( $name:ident : $rhs:tt )) => {
         {
             let step = Step::Bind { bind_id: $input.intern_bind(stringify!($name)), idx: 0 };
             let child = rule!(input: $input, $rhs);
-            $input.graph.node(step, vec![child])
+            $input.graph_mut().node(step, vec![child])
         }
     };
     (input: $input:expr, ( $rhs:tt * )) => {
         {
             let step = Step::Sequence { min: 0, max: None };
             let child = rule!(input: $input, $rhs);
-            $input.graph.node(step, vec![child])
+            $input.graph_mut().node(step, vec![child])
         }
     };
     (input: $input:expr, ( $($rhs:tt)* )) => {
@@ -358,94 +267,10 @@ macro_rules! rule {
                     rule!(input: $input, $rhs),
                 )*
             ];
-            $input.graph.node(Step::Idx(IdxKind::Product, 0), children)
+            $input.graph_mut().node(Step::Idx(IdxKind::Product, 0), children)
             // TODO: IdxKind::Product does not need a usize?
         }
     };
-}
-
-use proc_macro2::{Delimiter, TokenTree};
-
-#[derive(Clone, Copy, Debug)]
-enum VerifyState {
-    ExpectName,
-    ExpectEq,
-    ExpectContent,
-}
-
-#[derive(Clone, Debug)]
-struct VerifyGroup {
-    name: String,
-    content: TokenStream,
-}
-
-impl VerifyGroup {
-    fn new() -> Self {
-        VerifyGroup {
-            name: String::new(),
-            content: TokenStream::new(),
-        }
-    }
-}
-
-fn verify(input: Input, tokens: TokenStream) {
-    let mut groups = vec![];
-    let mut what_to_expect = vec![
-        VerifyState::ExpectName,
-        VerifyState::ExpectEq,
-        VerifyState::ExpectEq,
-        VerifyState::ExpectContent,
-    ]
-    .into_iter()
-    .cycle();
-    let mut state = VerifyGroup::new();
-    for (token_tree, step) in tokens.into_iter().zip(what_to_expect) {
-        match (token_tree, step) {
-            (TokenTree::Ident(ident), VerifyState::ExpectName) => {
-                state.name = ident.to_string();
-            }
-            (TokenTree::Punct(punct), VerifyState::ExpectEq) => {
-                assert_eq!(punct.as_char(), '=');
-            }
-            (TokenTree::Group(group), VerifyState::ExpectContent) => {
-                assert_eq!(group.delimiter(), Delimiter::Brace);
-                state.content = group.stream();
-                groups.push(mem::replace(&mut state, VerifyGroup::new()));
-            }
-            (token_tree, step) => {
-                panic!(
-                    "unexpected token tree {:?}, current state {:?}",
-                    token_tree, step
-                );
-            }
-        }
-    }
-
-    // println!("{:?}", input);
-
-    let mut db = DatabaseStruct::default();
-    db.set_input(Rc::new(input));
-
-    for group in groups {
-        match &group.name[..] {
-            "input" => {
-                assert_eq!(db.pretty_input(), group.content.to_string());
-            }
-            "flattened" => {
-                unimplemented!();
-            }
-            "trace" => {
-                unimplemented!();
-            }
-            "rewritten" => {
-                unimplemented!();
-            }
-            "types" => {
-                unimplemented!();
-            }
-            _ => {}
-        }
-    }
 }
 
 #[cfg(test)]

@@ -140,7 +140,7 @@ impl PathwayGraph {
     }
 }
 
-struct NodeWithChildren<'a> {
+pub struct NodeWithChildren<'a> {
     id: NodeId,
     children: Box<dyn Iterator<Item = NodeId> + 'a>,
 }

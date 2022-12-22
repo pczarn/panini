@@ -1,6 +1,12 @@
 
 
-use proc_macro2::{Delimiter, TokenTree};
+use std::mem;
+use std::rc::Rc;
+
+use proc_macro2::{Delimiter, TokenTree, TokenStream};
+
+use crate::input::Input;
+use crate::{DatabaseStruct, ProvideInput};
 
 #[derive(Clone, Copy, Debug)]
 enum VerifyState {
@@ -24,7 +30,7 @@ impl VerifyGroup {
     }
 }
 
-fn verify(input: Input, tokens: TokenStream) {
+pub fn verify(input: Input, tokens: TokenStream) {
     let mut groups = vec![];
     let mut what_to_expect = vec![
         VerifyState::ExpectName,
