@@ -6,14 +6,14 @@ use indexmap::IndexSet;
 use crate::graph::{PathwayGraph, FragmentId, NodeId, BindId};
 
 #[derive(Clone)]
-pub struct Input {
+pub struct RichGraph {
     graph: PathwayGraph,
     sym_set: IndexSet<String>,
     bind_set: IndexSet<String>,
     rule_indices: BTreeMap<String, usize>,
 }
 
-pub struct FrozenInput {
+pub struct FrozenRichGraph {
     graph: PathwayGraph,
     sym_set: FrozenIndexSet<String>,
     bind_set: FrozenIndexSet<String>,
@@ -21,14 +21,14 @@ pub struct FrozenInput {
 }
 
 #[derive(Debug)]
-pub struct InputDebug<'a> {
+pub struct RichGraphDebug<'a> {
     graph: &'a PathwayGraph,
     sym_set: Vec<String>,
     bind_set: Vec<String>,
     rule_indices: &'a BTreeMap<String, usize>,
 }
 
-impl Input {
+impl RichGraph {
     pub fn sym(&self, fragment_id: FragmentId) -> Option<&str> {
         self.sym_set.iter().nth(fragment_id as usize).map(|s| &s[..])
     }
@@ -46,7 +46,7 @@ impl Input {
     }
 }
 
-impl ::std::fmt::Debug for Input {
+impl ::std::fmt::Debug for RichGraph {
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> Result<(), ::std::fmt::Error> {
         fn interner_to_vec(set: &IndexSet<String>) -> Vec<String> {
             let mut result = vec![];
@@ -59,7 +59,7 @@ impl ::std::fmt::Debug for Input {
             }
             result
         }
-        InputDebug {
+        RichGraphDebug {
             graph: &self.graph,
             sym_set: interner_to_vec(&self.sym_set),
             bind_set: interner_to_vec(&self.bind_set),
@@ -69,9 +69,9 @@ impl ::std::fmt::Debug for Input {
     }
 }
 
-impl FrozenInput {
+impl FrozenRichGraph {
     pub fn new() -> Self {
-        FrozenInput {
+        FrozenRichGraph {
             graph: PathwayGraph::new(),
             sym_set: FrozenIndexSet::new(),
             bind_set: FrozenIndexSet::new(),
@@ -94,8 +94,8 @@ impl FrozenInput {
         result
     }
 
-    pub fn thaw(self) -> Input {
-        Input {
+    pub fn thaw(self) -> RichGraph {
+        RichGraph {
             graph: self.graph,
             sym_set: self.sym_set.into_set(),
             bind_set: self.bind_set.into_set(),

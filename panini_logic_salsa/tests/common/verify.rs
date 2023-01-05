@@ -5,8 +5,8 @@ use std::rc::Rc;
 
 use proc_macro2::{Delimiter, TokenTree, TokenStream};
 
-use crate::input::Input;
-use crate::{DatabaseStruct, ProvideInput};
+use crate::input::{DatabaseStruct, ProvideInput};
+// use crate::rules::Rules;
 
 #[derive(Clone, Copy, Debug)]
 enum VerifyState {
@@ -21,6 +21,13 @@ struct VerifyGroup {
     content: TokenStream,
 }
 
+#[macro_export]
+macro_rules! verify {
+    ($($tts:tt)*) => {
+        verify(quote! { $($tts)* })
+    };
+}
+
 impl VerifyGroup {
     fn new() -> Self {
         VerifyGroup {
@@ -30,7 +37,7 @@ impl VerifyGroup {
     }
 }
 
-pub fn verify(input: Input, tokens: TokenStream) {
+pub fn verify(tokens: TokenStream) {
     let mut groups = vec![];
     let mut what_to_expect = vec![
         VerifyState::ExpectName,
@@ -73,8 +80,8 @@ pub fn verify(input: Input, tokens: TokenStream) {
             "input" => {
                 assert_eq!(db.pretty_input(), group.content.to_string());
             }
-            "flattened" => {
-                unimplemented!();
+            "rules" => {
+                assert_eq!(db.pretty_rules(), group.content.to_string());
             }
             "trace" => {
                 unimplemented!();

@@ -1,58 +1,186 @@
-use std::collections::BTreeSet;
+use std::fmt::{Debug, Display};
 
-#[derive(Clone, Debug)]
+use elsa::{FrozenBTreeMap, FrozenVec};
+
+thread_local! {
+    static PATHWAY_GRAPH: PathwayGraph = PathwayGraph::new();
+}
+
 pub struct PathwayGraph {
-    nodes: Vec<Step>,
-    edges: BTreeSet<Edge>,
+    nodes: FrozenVec<Step>,
+    edges: FrozenBTreeMap<DirectedEdge, Epoch>,
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct NodeRef {
+    id: NodeId,
+    graph: GraphSlice,
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Step {
-    Idx(IdxKind, usize),
-    Fragment(FragmentId),
-    StmtFragment(FragmentId),
-    StmtTy(TyId),
-    // Class(Class, Symbol),
-    // RightQuote,
-    Bind { bind_id: BindId, idx: usize },
+    Group(GroupKind),
+    Idx(Idx),
     Sequence { min: u32, max: Option<u32> },
     SequenceEnd,
     SequenceToken,
+    Rule,
+    Bind { label: Box<dyn Label> },
+    Stmt { lhs: Box<dyn Symbol> },
+    Symbol { symbol: Box<dyn Symbol> },
+    Type { ty: Box<dyn Type> },
+    GenerateSymbolForPath,
     Max,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-enum Edge {
-    Forward { a: usize, b: usize },
-    Backward { b: usize, a: usize },
+enum DirectedEdge {
+    Forward(UndirectedEdge),
+    Backward(UndirectedEdge),
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct UndirectedEdge {
+    a: NodeId,
+    epoch: Epoch,
+    b: NodeId,
+}
+
+macro_rules! edge {
+    (($a:expr) -- ($epoch:expr) -- ($b:expr)) => {
+        UndirectedEdge {
+            a: $a,
+            epoch: $epoch,
+            b: $b,
+        }
+    };
+    (($a:expr) -> ($epoch:expr) -> ($b:expr)) => {
+        DirectedEdge::Forward(edge! { ($a) -- ($epoch) -- ($b) })
+    };
+    (($a:expr) <- ($epoch:expr) <- ($b:expr)) => {
+        DirectedEdge::Backward(edge! { ($a) -- ($epoch) -- ($b) })
+    };
 }
 
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum IdxKind {
+pub enum GroupKind {
     Sum,
     Product,
     Stmt,
 }
 
-pub type IdentId = u32;
-pub type ExprId = u32;
-pub type AttrId = u32;
-pub type LexerId = u32;
-pub type TyId = u32;
-pub type BindId = u32;
-pub type FragmentId = u32;
-pub type SpanId = u32;
-pub type NodeId = usize;
+pub struct GraphSlice {
+    nodes: Epoch,
+    edges: Epoch,
+}
 
-pub const NULL_NODE: usize = 0;
+pub trait Symbol: Debug + Display {}
+pub trait Label: Debug + Display {}
+pub trait Type: Debug + Display {}
+
+pub type NodeId = usize;
+pub type Epoch = usize;
+pub type Idx = usize;
+
+pub const NULL_NODE: NodeId = 0;
+
+impl GraphSlice {
+    pub fn siblings(self, node_id: NodeId) -> impl Iterator<Item = NodeRef> {
+        self.parents(node_id)
+            .flat_map(move |parent| self.children(parent))
+            .filter(move |&child| child.id != node_id)
+    }
+
+    pub fn parents(self, child: NodeId) -> impl Iterator<Item = NodeRef> {
+        let range = edge! { (child) <- (Epoch::MIN) <- (NodeId::MIN) }
+            ..edge! { (child) <- (self.edges) <- (NodeId::MAX) };
+        PATHWAY_GRAPH
+            .edges
+            .range(range)
+            .map(|&edge| edge.backward_parent())
+    }
+
+    pub fn children(self, parent: NodeId) -> impl Iterator<Item = NodeRef> {
+        let range = edge! { (parent) -> (Epoch::MIN) -> (NodeId::MIN) }
+            ..edge! { (parent) -> (self.edges) -> (NodeId::MAX) };
+        PATHWAY_GRAPH
+            .edges
+            .range(range)
+            .map(|&edge| edge.forward_child())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = NodeRef> + '_ {
+        (0..self.nodes).map(|id| self.get_ref(id as NodeId))
+    }
+
+    pub fn get_step(&self, node_id: NodeId) -> Option<Step> {
+        if node_id < self.nodes as NodeId {
+            return None;
+        }
+        PATHWAY_GRAPH.nodes.get(node_id as usize).cloned()
+    }
+
+    pub fn get_ref(self, node_id: NodeId) -> NodeRef {
+        NodeRef {
+            id: node_id,
+            graph: self,
+        }
+    }
+
+    pub fn roots(&self) -> impl Iterator<Item = NodeRef> {
+        let mut is_root = vec![true; self.nodes.len()];
+        for &edge in self.edges.keys() {
+            is_root[edge.child_id() as usize] = false;
+        }
+        self.iter()
+            .zip(is_root.into_iter())
+            .filter_map(|(node, is_root)| if is_root { Some(node) } else { None })
+    }
+}
+
+impl NodeRef {
+    pub fn step(self) -> Step {
+        PATHWAY_GRAPH.get(self.id)
+    }
+
+    pub fn id(self) -> NodeId {
+        self.id
+    }
+
+    pub fn add_edge_to(self, end: NodeRef) {
+        PATHWAY_GRAPH.add_edge(self, end)
+    }
+
+    pub fn add_edge_from(self, start: NodeRef) {
+        PATHWAY_GRAPH.add_edge(start, self)
+    }
+
+    pub fn children(self) -> impl Iterator<Item = NodeRef> {
+        PATHWAY_GRAPH.children(self)
+    }
+}
+
+impl DirectedEdge {
+    fn parent_id(self) -> NodeId {
+        match self {
+            DirectedEdge::Forward(UndirectedEdge { a, epoch, b }) => a,
+            DirectedEdge::Backward(UndirectedEdge { a, epoch, b }) => b,
+        }
+    }
+
+    fn child_id(self) -> NodeId {
+        match self {
+            DirectedEdge::Forward(UndirectedEdge { a, epoch, b }) => b,
+            DirectedEdge::Backward(UndirectedEdge { a, epoch, b }) => a,
+        }
+    }
+}
 
 impl PathwayGraph {
     pub fn new() -> Self {
-        // let null_node = Node::Step { step: Step::Max, child: NULL_NODE, parent: NULL_NODE };
-        // PathwayGraph { nodes: vec![null_node] }
         PathwayGraph {
-            nodes: vec![],
-            edges: BTreeSet::new(),
+            nodes: FrozenVec::new(),
+            edges: FrozenBTreeMap::new(),
         }
     }
 
@@ -66,81 +194,59 @@ impl PathwayGraph {
     }
 
     fn add_edge(&mut self, parent: NodeId, child: NodeId) {
-        self.edges.insert(Edge::Forward {
-            a: parent,
-            b: child,
-        });
-        self.edges.insert(Edge::Backward {
-            b: child,
-            a: parent,
-        });
-    }
-
-    pub fn siblings(&self, node: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        self.parents(node)
-            .flat_map(move |parent| self.children(parent))
-            .filter(move |&child| child != node)
-    }
-
-    pub fn parents(&self, child: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        let parent_edge_a = Edge::Backward { b: child, a: 0 };
-        let parent_edge_b = Edge::Backward { b: child, a: !0 };
-        self.edges.range(parent_edge_a..parent_edge_b).map(|&edge| {
-            if let Edge::Backward { a, .. } = edge {
-                a
-            } else {
-                unreachable!()
-            }
-        })
-    }
-
-    pub fn children(&self, parent: NodeId) -> impl Iterator<Item = NodeId> + '_ {
-        let sibling_edge_a = Edge::Forward { a: parent, b: 0 };
-        let sibling_edge_b = Edge::Forward { a: parent, b: !0 };
         self.edges
-            .range(sibling_edge_a..sibling_edge_b)
-            .map(|&edge| {
-                if let Edge::Forward { b, .. } = edge {
-                    b
-                } else {
-                    unreachable!()
-                }
-            })
+            .insert(edge! { (parent) -> (self.current_epoch()) -> (child) });
+        self.edges
+            .insert(edge! { (child) <- (self.current_epoch()) <- (parent) });
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Step> + '_ {
-        self.nodes.iter()
+    pub fn siblings(&self, node_id: NodeId) -> impl Iterator<Item = NodeRef> + '_ {
+        self.parents(node_id)
+            .flat_map(move |parent| self.children(parent))
+            .filter(move |&child| child.id != node_id)
     }
 
-    pub fn get(&self, step_id: NodeId) -> Option<Step> {
-        self.nodes.get(step_id).cloned()
+    pub fn parents(&self, child: NodeId) -> impl Iterator<Item = NodeRef> {
+        self.slice().parents(child)
     }
 
-    pub fn roots(&self) -> impl Iterator<Item = NodeId> {
-        let mut is_root = vec![true; self.nodes.len()];
-        for &edge in &self.edges {
-            match edge {
-                Edge::Forward { a, b } => {
-                    is_root[b as usize] = false;
-                }
-                _ => {}
-            }
+    pub fn children(&self, parent: NodeId) -> impl Iterator<Item = NodeRef> {
+        self.slice().children(parent)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = NodeRef> {
+        self.slice().iter()
+    }
+
+    pub fn slice(&self) -> GraphSlice {
+        GraphSlice {
+            nodes: self.nodes.len(),
+            edges: self.current_epoch(),
         }
-        is_root
-            .into_iter()
-            .enumerate()
-            .filter_map(|(id, root)| if root { Some(id) } else { None })
     }
 
-    pub fn walk<'a>(&'a self) -> impl Iterator<Item = NodeWithChildren<'a>> {
-        self.iter().enumerate().map(|(i, &node)| NodeWithChildren {
-            id: i as NodeId,
-            children: Box::new(self.children(i as NodeId)) as Box<dyn Iterator<Item = NodeId> + 'a>,
-        })
+    pub fn current_epoch(&self) -> Epoch {
+        self.edges.len()
     }
-}
 
-pub struct NodeWithChildren<'a> {
-    id: NodeId,
-    children: Box<dyn Iterator<Item = NodeId> + 'a>,
+    pub fn get_step(&self, node_id: NodeId) -> Option<Step> {
+        self.nodes.get(node_id as usize).cloned()
+    }
+
+    pub fn get_ref(&self, node_id: NodeId) -> NodeRef {
+        NodeRef {
+            id: node_id,
+            graph: self.slice(),
+        }
+    }
+
+    pub fn roots(&self) -> impl Iterator<Item = NodeRef> {
+        let mut is_root = vec![true; self.nodes.len()];
+        for &edge in self.edges.keys() {
+            is_root[edge.child_id() as usize] = false;
+        }
+        self.iter()
+            .zip(is_root.into_iter())
+            .filter_map(|(node, is_root)| if is_root { Some(node) } else { None })
+    }
 }
