@@ -17,8 +17,9 @@ fn main() {
                 start Stmt.0 * * Product.1 b;
             }
             rules == {
-                start Stmt.0 => Rule { start ::= 0 generated[0]* 6; };
-                start Stmt.0 * => Rule { generated[0] ::= generated[1]* 5; }
+                generated[0] => start Stmt.0 *;
+                start Stmt.0 => Rule { start ::= 0 generated[start Stmt.0 *]* 6; };
+                start Stmt.0 * => Rule { generated[start Stmt.0 *] ::= generated[start Stmt]* 5; }
                 start Stmt.0 * * => Rule { generated[1] ::= 1 a 2 b 3; };
             }
             trace == {

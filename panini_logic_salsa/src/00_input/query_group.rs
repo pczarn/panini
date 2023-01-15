@@ -5,84 +5,94 @@ use proc_macro2::{Ident, Span, TokenStream, TokenTree};
 use quote::quote;
 
 use crate::graph::*;
+use crate::values::*;
 use crate::utils::ComparableTokenStream;
 
 #[salsa::query_group(InputDatabase)]
 pub trait Input {
     #[salsa::input]
-    fn input_graph(&self) -> GraphSlice;
+    fn input_graph(&self) -> PathwayGraph;
 
     fn pretty_input(&self) -> String;
 
     fn tokenize_input(&self) -> ComparableTokenStream;
 
-    fn tokenize_input_node(&self, node: NodeRef) -> ComparableTokenStream;
+    fn tokenize_input_node(&self, node: NodeHash) -> ComparableTokenStream;
 
     fn tokenize_children(
         &self,
-        node_id: NodeId,
+        node: NodeHash,
         separator: Option<ComparableTokenStream>,
         may_add_parentheses: bool,
     ) -> ComparableTokenStream;
 
-    fn tokenize_each_child(&self, node_id: NodeId) -> Vec<ComparableTokenStream>;
+    fn tokenize_each_child(&self, node: NodeHash) -> Vec<ComparableTokenStream>;
 
-    fn need_parentheses_around_children(&self, node_id: NodeId) -> bool;
+    fn need_parentheses_around_children(&self, node: NodeHash) -> bool;
+
+    #[salsa::interned]
+    fn symbol(&self, symbol: Box<dyn SymbolData>) -> Symbol;
+
+    #[salsa::interned]
+    fn label(&self, symbol: Box<dyn LabelData>) -> Label;
+
+    #[salsa::interned]
+    fn ty(&self, symbol: Box<dyn TypeData>) -> Type;
 }
 
 fn pretty_input(db: &dyn Input) -> String {
-    db.tokenize_input().to_string()
+    db.tokenize_input().root().children().find map(|child| child matches Step::Tokens { tokens }).to_string()
 }
 
-fn tokenize_input(db: &dyn Input) -> ComparableTokenStream {
-    let mut result = TokenStream::new();
-    for root_id in db.input().graph().roots() {
-        result.extend(db.tokenize_input_node(root_id).token_stream());
-    }
-    result.into()
+fn tokenize_input(db: &dyn Input) -> PathwayGraph {
+    add root node to PathwayGraph
+    db.input_graph().join(|node| db.token_node_for_input_node(node))
 }
 
-fn tokenize_input_node(db: &dyn Input, node: NodeRef) -> ComparableTokenStream {
+fn input_node_tokens(db: &dyn Input, node: NodeHash) -> ComparableTokenStream {
     match node.step() {
         Step::Symbol { symbol } => {
-            let ident = symbol.to_string();
-            let mut result = TokenStream::new();
-            result.extend(vec![TokenTree::Ident(Ident::new(
-                &ident[..],
-                Span::call_site(),
-            ))]);
-            result
+            db.lookup_symbol(symbol).to_token_stream()
         }
-        Step::Sequence { min: 0, max: None } => {
-            let children: TokenStream = db.tokenize_children(node, None, true).into();
-            quote! { #children * }
+        // TODO other ranges
+        Step::Sequence { range: SequenceRange { min: 0, max: None } } => {
+            quote! { CHILDREN * }
         }
-        Step::Group(GroupKind::Sum | GroupKind::Stmt) => db
-            .tokenize_children(node, Some(quote! { | }.into()), false)
-            .into(),
+        Step::Group(GroupKind::Sum | GroupKind::Stmt) => {
+            quote! { CHILD | CHILD }
+        }
         Step::Idx(..) | Step::Group(GroupKind::Product) => {
-            db.tokenize_children(node, None, false).into()
+            quote! { CHILDREN }
         }
         Step::Bind { label } => {
-            let label_str = label.to_string();
-            let bind_ident = TokenTree::Ident(Ident::new(&label_str[..], Span::call_site()));
-            let children: TokenStream = db.tokenize_children(node, None, true).into();
-            quote! { #bind_ident : #children }
+            let bind_ident = db.lookup_label(label).to_token_stream();
+            quote! { #bind_ident : CHILDREN }
         }
         Step::Stmt { lhs } => {
-            let lhs_ident = lhs.to_string();
-            let lhs = TokenTree::Ident(Ident::new(&lhs_ident[..], Span::call_site()));
-            let rhs: TokenStream = db.tokenize_children(node, None, false).into();
-            quote! { #lhs ::= #rhs ; }
+            let lhs = db.lookup_symbol(lhs).to_token_stream();
+            quote! { #lhs ::= CHILDREN ; }
         }
         other => panic!("UNEXPECTED STEP: {:?}", other),
     }
     .into()
 }
 
+fn token_node_for_input_node(db: &dyn Input, node: NodeHash) -> PathwayGraph {
+    let tokens = db.input_node_tokens(node);
+    check for separator and CHILD/CHILDREN, check for parenthesizing (parenthesize CHILDREN) - how to make this clear???
+    let children = db.tokenize_children(node);
+    replace CHILDREN with tokenized children
+    or replace CHILD separator CHILD with tokenized children
+    graph! {
+        (External { node })
+        --
+        (Tokens { result })
+    }
+}
+
 fn tokenize_children(
     db: &dyn Input,
-    node: NodeRef,
+    node: NodeHash,
     separator: Option<ComparableTokenStream>,
     may_add_parentheses: bool,
 ) -> ComparableTokenStream {
@@ -108,17 +118,17 @@ fn tokenize_children(
     }
 }
 
-fn tokenize_each_child(db: &dyn Input, node: NodeRef) -> Vec<ComparableTokenStream> {
-    node.children()
-        .map(|child_id| db.tokenize_node(child_id))
+fn tokenize_each_child(db: &dyn Input, node: NodeHash) -> Vec<ComparableTokenStream> {
+    node.node_ref().children()
+        .map(|child_id| db.tokenize_input_node(child_id))
         .collect()
 }
 
-fn need_parentheses_around_children(db: &dyn Input, node: NodeRef) -> bool {
+fn need_parentheses_around_children(db: &dyn Input, node: NodeHash) -> bool {
     node.children()
         .enumerate()
         .any(|(i, node_ref)| match (i, node_ref.step()) {
-            (0, Step::Fragment(..)) => false,
+            (0, Step::Symbol { .. }) => false,
             (0, Step::Sequence { .. }) => false,
             _ => true,
         })

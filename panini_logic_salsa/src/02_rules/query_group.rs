@@ -8,45 +8,31 @@ use quote::quote;
 
 use crate::graph::*;
 use crate::utils::ComparableTokenStream;
+use crate::input::Input;
+use crate::values::*;
 
-#[salsa::query_group(RulesDatabase)]
+#[salsa::query_group(RulesStorage)]
 pub trait Rules: Input {
-    fn rich_graph_with_rules(&self) -> Rc<RichGraph>;
+    fn rule_graph(&self) -> PathwayGraph;
 
     fn pretty_rules(&self) -> String;
 
     fn tokenize_rules(&self) -> ComparableTokenStream;
 
-    fn rule_graph(&self, node_id: NodeId) -> Option<PathwayGraph>;
+    fn tokenize_rules_node(&self, node: NodeHash) -> ComparableTokenStream;
 
-    // fn tokenize_node(&self, node_id: NodeId) -> ComparableTokenStream;
+    fn rule_graph_for_node(&self, node: NodeHash) -> Option<PathwayGraph>;
 
-    // fn node(&self, node_id: NodeId) -> Option<Step>;
+    fn child_steps(&self, node: NodeHash) -> Vec<Step>;
 
-    // fn tokenize_children(
-    //     &self,
-    //     node_id: NodeId,
-    //     separator: Option<ComparableTokenStream>,
-    //     may_add_parentheses: bool,
-    // ) -> ComparableTokenStream;
-
-    // fn tokenize_each_child(&self, node_id: NodeId) -> Vec<ComparableTokenStream>;
-
-    // fn need_parentheses_around_children(&self, node_id: NodeId) -> bool;
-
-    // fn children(&self, node_id: NodeId) -> Vec<NodeId>;
+    fn symbol_for_node(&self, node: NodeHash) -> Symbol;
 }
 
-fn rich_graph_with_rules(db: &dyn Rules) -> GraphSlice {
-    let mut input: RichGraph = db.input().into();
-    let mut new_graphs = vec![];
-    {
-        let graph = input.graph_mut();
-        new_graphs.extend(graph.iter().filter_map(|node| db.rule_graph(node.id)));
-    }
-
-    input.merge_graphs(new_graph);
-    Rc::new(input)
+fn rule_graph(db: &dyn Rules) -> PathwayGraph {
+    let mut result = db.input_graph();
+    let subgraphs: Vec<PathwayGraph> = result.iter().filter_map(|node| db.rule_graph_for_node(node)).collect();
+    result.join(&subgraphs[..]);
+    result
 }
 
 fn pretty_rules(db: &dyn Rules) -> String {
@@ -54,83 +40,72 @@ fn pretty_rules(db: &dyn Rules) -> String {
 }
 
 fn tokenize_rules(db: &dyn Rules) -> ComparableTokenStream {
-    let graph = db.rich_graph_with_rules();
+    let graph = db.rule_graph();
+    let mut result = TokenStream::new();
+    PATHWAY_GRAPH.with(|g| {
+        for root in g.roots() {
+            result.extend(db.tokenize_rules_node(root).token_stream());
+        }
+    })
+    result.into()
 }
 
-fn rule_graph(db: &dyn Rules, node_id: NodeId) -> Option<PathwayGraph> {
-    let children: Vec<Node> = db.children(node_id);
+fn rule_graph_for_node(db: &dyn Rules, node: NodeHash) -> Option<PathwayGraph> {
+    let children = db.child_steps(node);
     match &children[..] {
-        &[Node {
-            id: _,
-            step: Step::Fragment(..),
-        }] => None,
-        &[Node {
-            id: _,
-            step: Step::Group(GroupKind::Product),
-        }] => None,
-        &[Node {
-            id,
-            step: Step::Sequence { min, max },
-        }] => {
-            let mut result = PathwayGraph::new();
-            let fragment = result.node(Step::Fragment());
-            let seq = result.node(Step::Sequence { min, max }, vec![fragment]);
-            result.node(Step::Rule, vec![seq]);
-            Some(result)
+        &[Step::Symbol { .. }] => None,
+        &[Step::Group(GroupKind::Product)] => None,
+        &[Step::Sequence { range }] => {
+            let lhs = db.symbol_for_node(node);
+            Some(graph! {
+                (External { node })
+                --
+                (Rule { lhs })
+                --
+                (Sequence { range })
+            })
         }
         _ => None,
     }
 }
 
-fn rules(db: &dyn Rules) -> Rc<RichGraph> {
-    db.input()
+fn child_steps(db: &dyn Rules, node: NodeHash) -> Vec<Step> {
+    node.children().map(|child| child.step()).collect()
 }
 
-fn rules_for_node(db: &dyn ProvideInput, node_id: NodeId) -> BTreeMap<Path, Vec<Rule>> {}
+struct MutlipleTokenStreams
 
-fn tokenize_input(db: &dyn ProvideInput) -> ComparableTokenStream {
-    let mut result = TokenStream::new();
-    for root_id in db.input().graph().roots() {
-        result.extend(db.tokenize_node(root_id).0);
-    }
-    result.into()
-}
-
-fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStream {
-    match db.node(node_id).expect("invalid node_id") {
-        Step::Fragment(fragment_id) => {
-            let input = db.input();
-            let ident = input
-                .sym(fragment_id)
-                .expect("incorrect id in Fragment(fragment_id)");
-            let mut result = TokenStream::new();
-            result.extend(vec![TokenTree::Ident(Ident::new(ident, Span::call_site()))]);
-            result
+fn tokenize_rules_node(db: &dyn Rules, node: NodeHash) -> Vec<ComparableTokenStream> {
+    match node.step() {
+        Step::Rule { lhs } => {
+            let children: TokenStream = db.tokenize_children(node, None, true).into();
+            let lhs = db.lookup_symbol(lhs).to_token_stream();
+            quote! { => Rule { $lhs ::= $children } }
         }
-        Step::Sequence { min: 0, max: None } => {
-            let children: TokenStream = db.tokenize_children(node_id, None, true).into();
-            quote! { #children * }
+        Step::Symbol { symbol } => {
+            db.lookup_symbol(symbol).to_token_stream()
         }
-        Step::Idx(IdxKind::Sum, _idx) => db
-            .tokenize_children(node_id, Some(quote! { | }.into()), false)
+        // TODO other ranges
+        Step::Sequence { range: SequenceRange { min: 0, max: None } } => {
+            let children: MutlipleTokenStreams = db.tokenize_children(node, None, true).into();
+            children.prepend(quote! { * })
+        }
+        Step::Group(GroupKind::Sum | GroupKind::Stmt) =>
+            // split into multiple
+        db
+            .tokenize_children(node, None, false)
             .into(),
-        Step::Idx(IdxKind::Product, _idx) => db.tokenize_children(node_id, None, false).into(),
-        Step::Bind { bind_id, idx: _ } => {
-            let input = db.input();
-            let bind = input
-                .bind(bind_id)
-                .expect("incorrect id in Bind { bind_id }");
-            let bind_ident = TokenTree::Ident(Ident::new(bind, Span::call_site()));
-            let children: TokenStream = db.tokenize_children(node_id, None, true).into();
+        Step::Idx(..) | Step::Group(GroupKind::Product) => {
+            db.tokenize_children(node, None, false).into()
+        }
+        Step::Bind { label } => {
+            let bind_ident = db.lookup_label(label).to_token_stream();
+            let children: TokenStream = db.tokenize_children(node, None, true).into();
             quote! { #bind_ident : #children }
         }
-        Step::StmtFragment(fragment_id) => {
-            let input = db.input();
-            let lhs_ident = input
-                .sym(fragment_id)
-                .expect("incorrect id in StmtFragment(fragment_id)");
-            let lhs = TokenTree::Ident(Ident::new(lhs_ident, Span::call_site()));
-            let rhs: TokenStream = db.tokenize_children(node_id, None, false).into();
+        Step::Stmt { lhs } => {
+            let lhs = db.lookup_symbol(lhs).to_token_stream();
+            let rhs: TokenStream = db.tokenize_children(node, None, false).into();
             quote! { #lhs ::= #rhs ; }
         }
         other => panic!("UNEXPECTED STEP: {:?}", other),
@@ -138,47 +113,28 @@ fn tokenize_node(db: &dyn ProvideInput, node_id: NodeId) -> ComparableTokenStrea
     .into()
 }
 
-fn node(db: &dyn ProvideInput, node_id: NodeId) -> Option<Step> {
-    db.input().graph().get(node_id)
-}
-
-fn tokenize_children(
-    db: &dyn ProvideInput,
-    node_id: NodeId,
-    separator: Option<ComparableTokenStream>,
-    may_add_parentheses: bool,
-) -> ComparableTokenStream {
-    let mut inner = TokenStream::new();
-
-    inner.extend(
-        db.tokenize_each_child(node_id)
-            .into_iter()
-            .map(|elem| Some(elem).into_iter())
-            .intersperse(separator.into_iter())
-            .filter_map(|it| it.next().map(|elem| elem.token_stream())),
-    );
-    let add_parentheses = db.need_parentheses_around_children(node_id) && may_add_parentheses;
-    if add_parentheses {
-        quote! { ( #inner ) }.into()
-    } else {
-        inner.into()
+fn symbol_for_node(db: &dyn Rules, node: NodeHash) -> Symbol {
+    match node.step() {
+        Step::Symbol { symbol } => {
+            symbol
+        }
+        // TODO other ranges
+        Step::Sequence { range: SequenceRange { min: 0, max: None } } => {
+            self.symbol(Box::new(symbol from path (node)))
+        }
+        Step::Group(GroupKind::Sum | GroupKind::Stmt) => {
+            db.symbol_for_node(node.parents().next().unwrap())
+        }
+        Step::Idx(..) | Step::Group(GroupKind::Product) => {
+            db.symbol_for_node(node.parents().next().unwrap())
+        }
+        Step::Bind { label } => {
+            self.symbol(Box::new(symbol from path (node)))
+            sure that for node?
+        }
+        Step::Stmt { lhs } => {
+            lhs
+        }
+        other => panic!("UNEXPECTED STEP: {:?}", other),
     }
-}
-
-fn tokenize_each_child(db: &dyn ProvideInput, node_id: NodeId) -> Vec<ComparableTokenStream> {
-    db.children(node_id)
-        .into_iter()
-        .map(|child_id| db.tokenize_node(child_id))
-        .collect()
-}
-
-fn need_parentheses_around_children(db: &dyn ProvideInput, node_id: NodeId) -> bool {
-    db.children(node_id)
-        .into_iter()
-        .enumerate()
-        .any(|(i, id)| match (i, db.node(id).unwrap()) {
-            (0, Step::Fragment(..)) => false,
-            (0, Step::Sequence { .. }) => false,
-            _ => true,
-        })
 }

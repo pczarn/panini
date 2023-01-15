@@ -9,6 +9,7 @@ edition = "2021"
 salsa = "0.16"
 quote = "1.0"
 proc-macro2 = "1.0"
-elsa = { version = "1.7", features = ["indexmap"] }
 indexmap = "1.9"
 itertools = "0.10"
+siphasher = "0.3"
+elsa = { path = "../elsa" }
