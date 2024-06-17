@@ -1,5 +1,7 @@
 ## Panini • [![Latest version](https://img.shields.io/crates/v/panini.png)](https://crates.io/crates/panini)
 
+![logo of panini](https://github.com/pczarn/panini/blob/master/images/panini.png?raw=true)
+
 A blazing fast, modern, extensible parser generator.
 
 Work in progress.
